@@ -1,0 +1,596 @@
+---
+import '@astrojs/starlight/style/markdown.css';
+---
+
+<div class="sl-markdown-content"><slot /></div>
+
+<script type="module">
+  import mermaid from 'mermaid';
+
+  const darkThemeVariables = {
+    primaryColor: '#111827',
+    primaryTextColor: '#e5e7eb',
+    primaryBorderColor: '#6366f1',
+    lineColor: '#818cf8',
+    secondaryColor: '#0f172a',
+    tertiaryColor: '#020617',
+    background: '#09090b',
+    mainBkg: '#111827',
+    secondBkg: '#0f172a',
+    tertiaryBkg: '#020617',
+    clusterBkg: '#111827',
+    clusterBorder: '#4f46e5',
+    edgeLabelBackground: '#18181b',
+    actorBkg: '#111827',
+    actorBorder: '#6366f1',
+    actorTextColor: '#e5e7eb',
+    noteBkgColor: '#312e81',
+    noteTextColor: '#e0e7ff',
+    noteBorderColor: '#818cf8',
+    labelBoxBkgColor: '#18181b',
+    labelTextColor: '#e5e7eb',
+  };
+
+  const lightThemeVariables = {
+    primaryColor: '#ffffff',
+    primaryTextColor: '#0f172a',
+    primaryBorderColor: '#6366f1',
+    lineColor: '#4f46e5',
+    secondaryColor: '#eef2ff',
+    tertiaryColor: '#f8fafc',
+    background: '#ffffff',
+    mainBkg: '#ffffff',
+    secondBkg: '#eef2ff',
+    tertiaryBkg: '#f8fafc',
+    clusterBkg: '#f8fafc',
+    clusterBorder: '#6366f1',
+    edgeLabelBackground: '#ffffff',
+    actorBkg: '#ffffff',
+    actorBorder: '#6366f1',
+    actorTextColor: '#0f172a',
+    noteBkgColor: '#eef2ff',
+    noteTextColor: '#312e81',
+    noteBorderColor: '#818cf8',
+    labelBoxBkgColor: '#ffffff',
+    labelTextColor: '#0f172a',
+  };
+
+  function isLightTheme() {
+    return document.documentElement.dataset.theme === 'light';
+  }
+
+  function mermaidConfig() {
+    return {
+      startOnLoad: false,
+      securityLevel: 'loose',
+      theme: 'base',
+      themeVariables: isLightTheme() ? lightThemeVariables : darkThemeVariables,
+      fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+      flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis',
+      },
+      sequence: {
+        useMaxWidth: true,
+        wrap: true,
+      },
+      gantt: {
+        useMaxWidth: true,
+      },
+      er: {
+        useMaxWidth: true,
+      },
+    };
+  }
+
+  class MermaidDiagram extends HTMLElement {
+    source = '';
+    scale = 1;
+    minScale = 0.25;
+    maxScale = 4;
+    translateX = 0;
+    translateY = 0;
+    dragStartX = 0;
+    dragStartY = 0;
+    startTranslateX = 0;
+    startTranslateY = 0;
+    isDragging = false;
+    resizeObserver = null;
+    naturalWidth = 1;
+    naturalHeight = 1;
+
+    connectedCallback() {
+      this.source = decodeURIComponent(this.dataset.source || '').trim();
+      if (!this.source) {
+        this.innerHTML = '<div class="mermaid-error">Empty Mermaid source.</div>';
+        return;
+      }
+      this.renderDiagram();
+    }
+
+    disconnectedCallback() {
+      this.resizeObserver?.disconnect();
+      document.removeEventListener('fullscreenchange', this.onFullscreenChange);
+    }
+
+    async renderDiagram() {
+      const sourceEscaped = this.escapeHtml(this.source);
+      this.innerHTML = `
+        <div class="mermaid-shell">
+          <div class="mermaid-toolbar">
+            <div class="mermaid-toolbar-left">
+              <span class="mermaid-badge">Mermaid</span>
+              <span class="mermaid-hint">Drag to pan • wheel to zoom</span>
+            </div>
+            <div class="mermaid-controls" aria-label="Diagram controls">
+              <button type="button" class="mermaid-control" data-action="zoom-out" title="Zoom out">-</button>
+              <button type="button" class="mermaid-control" data-action="zoom-in" title="Zoom in">+</button>
+              <button type="button" class="mermaid-control" data-action="fit" title="Fit diagram">Fit</button>
+              <button type="button" class="mermaid-control" data-action="reset" title="Reset zoom">100%</button>
+              <button type="button" class="mermaid-control" data-action="fullscreen" title="Open fullscreen">Full</button>
+            </div>
+          </div>
+          <div class="mermaid-stage">
+            <div class="mermaid-loading">Rendering diagram...</div>
+          </div>
+          <details class="mermaid-source-panel">
+            <summary>Show source</summary>
+            <pre><code class="language-mermaid">${sourceEscaped}</code></pre>
+          </details>
+        </div>
+      `;
+
+      const stage = this.querySelector('.mermaid-stage');
+      if (!stage) return;
+
+      try {
+        mermaid.initialize(mermaidConfig());
+        const id = `mermaid-${Math.random().toString(36).slice(2)}`;
+        const { svg, bindFunctions } = await mermaid.render(id, this.source);
+        stage.innerHTML = `
+          <div class="mermaid-viewport">
+            <div class="mermaid-canvas">
+              <div class="mermaid-svg">${svg}</div>
+            </div>
+          </div>
+        `;
+        bindFunctions?.(stage);
+        this.setupPanZoom();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        stage.innerHTML = `
+          <div class="mermaid-error">
+            <strong>Mermaid render failed</strong>
+            <div>${this.escapeHtml(message)}</div>
+          </div>
+        `;
+      }
+    }
+
+    escapeHtml(value) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    onFullscreenChange = () => {
+      const button = this.querySelector('[data-action="fullscreen"]');
+      const active = document.fullscreenElement === this.querySelector('.mermaid-shell');
+      if (button) {
+        button.textContent = active ? 'Exit' : 'Full';
+        button.setAttribute('title', active ? 'Exit fullscreen' : 'Open fullscreen');
+      }
+      setTimeout(() => this.fitToViewport(), 30);
+    };
+
+    safeBBox(svg) {
+      try {
+        return svg.getBBox();
+      } catch {
+        return { width: 0, height: 0 };
+      }
+    }
+
+    measureDiagram(svg, canvas) {
+      const viewBox = svg.viewBox?.baseVal;
+      const bbox = this.safeBBox(svg);
+      const attrWidth = Number.parseFloat(svg.getAttribute('width') || '0');
+      const attrHeight = Number.parseFloat(svg.getAttribute('height') || '0');
+
+      this.naturalWidth = viewBox?.width || bbox.width || attrWidth || 1200;
+      this.naturalHeight = viewBox?.height || bbox.height || attrHeight || 800;
+
+      svg.setAttribute('width', String(this.naturalWidth));
+      svg.setAttribute('height', String(this.naturalHeight));
+      svg.style.width = `${this.naturalWidth}px`;
+      svg.style.height = `${this.naturalHeight}px`;
+      canvas.style.width = `${this.naturalWidth}px`;
+      canvas.style.height = `${this.naturalHeight}px`;
+    }
+
+    setupPanZoom() {
+      const viewport = this.querySelector('.mermaid-viewport');
+      const canvas = this.querySelector('.mermaid-canvas');
+      const svg = this.querySelector('.mermaid-svg svg');
+      if (!viewport || !canvas || !svg) return;
+
+      this.measureDiagram(svg, canvas);
+
+      this.querySelectorAll('.mermaid-control').forEach((button) => {
+        button.addEventListener('click', () => {
+          const action = button.getAttribute('data-action');
+          if (action === 'zoom-in') this.zoomBy(1.2);
+          if (action === 'zoom-out') this.zoomBy(1 / 1.2);
+          if (action === 'fit') this.fitToViewport();
+          if (action === 'reset') this.resetZoom();
+          if (action === 'fullscreen') this.toggleFullscreen();
+        });
+      });
+
+      viewport.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        const delta = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+        this.zoomAtPoint(delta, event.clientX, event.clientY, viewport);
+      }, { passive: false });
+
+      viewport.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        this.isDragging = true;
+        this.dragStartX = event.clientX;
+        this.dragStartY = event.clientY;
+        this.startTranslateX = this.translateX;
+        this.startTranslateY = this.translateY;
+        viewport.classList.add('is-dragging');
+        viewport.setPointerCapture(event.pointerId);
+      });
+
+      viewport.addEventListener('pointermove', (event) => {
+        if (!this.isDragging) return;
+        this.translateX = this.startTranslateX + (event.clientX - this.dragStartX);
+        this.translateY = this.startTranslateY + (event.clientY - this.dragStartY);
+        this.applyTransform();
+      });
+
+      const stopDrag = (event) => {
+        if (!this.isDragging) return;
+        this.isDragging = false;
+        viewport.classList.remove('is-dragging');
+        if (event?.pointerId != null && viewport.hasPointerCapture(event.pointerId)) {
+          viewport.releasePointerCapture(event.pointerId);
+        }
+      };
+
+      viewport.addEventListener('pointerup', stopDrag);
+      viewport.addEventListener('pointercancel', stopDrag);
+      viewport.addEventListener('pointerleave', stopDrag);
+
+      this.resizeObserver?.disconnect();
+      this.resizeObserver = new ResizeObserver(() => this.fitToViewport({ preserveZoomIfLarger: true }));
+      this.resizeObserver.observe(viewport);
+      document.removeEventListener('fullscreenchange', this.onFullscreenChange);
+      document.addEventListener('fullscreenchange', this.onFullscreenChange);
+
+      this.fitToViewport();
+    }
+
+    applyTransform() {
+      const canvas = this.querySelector('.mermaid-canvas');
+      const zoomLabel = this.querySelector('[data-action="reset"]');
+      if (!canvas) return;
+      canvas.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+      if (zoomLabel) zoomLabel.textContent = `${Math.round(this.scale * 100)}%`;
+    }
+
+    zoomBy(factor) {
+      const viewport = this.querySelector('.mermaid-viewport');
+      if (!viewport) return;
+      const rect = viewport.getBoundingClientRect();
+      this.zoomAtPoint(factor, rect.left + rect.width / 2, rect.top + rect.height / 2, viewport);
+    }
+
+    zoomAtPoint(factor, clientX, clientY, viewport) {
+      const nextScale = Math.min(this.maxScale, Math.max(this.minScale, this.scale * factor));
+      if (nextScale === this.scale) return;
+      const rect = viewport.getBoundingClientRect();
+      const pointX = clientX - rect.left;
+      const pointY = clientY - rect.top;
+      const scaleRatio = nextScale / this.scale;
+
+      this.translateX = pointX - (pointX - this.translateX) * scaleRatio;
+      this.translateY = pointY - (pointY - this.translateY) * scaleRatio;
+      this.scale = nextScale;
+      this.applyTransform();
+    }
+
+    resetZoom() {
+      this.scale = 1;
+      this.translateX = 0;
+      this.translateY = 0;
+      this.applyTransform();
+      this.centerIfSmaller();
+    }
+
+    fitToViewport(options = {}) {
+      const viewport = this.querySelector('.mermaid-viewport');
+      if (!viewport) return;
+
+      const naturalWidth = this.naturalWidth || 1;
+      const naturalHeight = this.naturalHeight || 1;
+      const availableWidth = Math.max(viewport.clientWidth - 24, 1);
+      const availableHeight = Math.max(viewport.clientHeight - 24, 1);
+      const fitScale = Math.min(1.5, Math.max(this.minScale, Math.min(availableWidth / naturalWidth, availableHeight / naturalHeight)));
+
+      if (options.preserveZoomIfLarger && this.scale > fitScale) {
+        this.centerIfSmaller();
+        return;
+      }
+
+      this.scale = fitScale;
+      const scaledWidth = naturalWidth * this.scale;
+      const scaledHeight = naturalHeight * this.scale;
+      this.translateX = Math.max((viewport.clientWidth - scaledWidth) / 2, 0);
+      this.translateY = Math.max((viewport.clientHeight - scaledHeight) / 2, 0);
+      this.applyTransform();
+    }
+
+    centerIfSmaller() {
+      const viewport = this.querySelector('.mermaid-viewport');
+      if (!viewport) return;
+      const naturalWidth = this.naturalWidth || 1;
+      const naturalHeight = this.naturalHeight || 1;
+      const scaledWidth = naturalWidth * this.scale;
+      const scaledHeight = naturalHeight * this.scale;
+      if (scaledWidth <= viewport.clientWidth) {
+        this.translateX = (viewport.clientWidth - scaledWidth) / 2;
+      }
+      if (scaledHeight <= viewport.clientHeight) {
+        this.translateY = (viewport.clientHeight - scaledHeight) / 2;
+      }
+      this.applyTransform();
+    }
+
+    async toggleFullscreen() {
+      const shell = this.querySelector('.mermaid-shell');
+      if (!shell) return;
+      if (document.fullscreenElement === shell) {
+        await document.exitFullscreen();
+        return;
+      }
+      await shell.requestFullscreen();
+    }
+  }
+
+  if (!customElements.get('mermaid-diagram')) {
+    customElements.define('mermaid-diagram', MermaidDiagram);
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+        document.querySelectorAll('mermaid-diagram').forEach((element) => {
+          element.renderDiagram?.();
+        });
+      }
+    }
+  });
+
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  });
+</script>
+
+<style is:global>
+  .sl-markdown-content mermaid-diagram {
+    display: block;
+    margin: 1.25rem 0;
+  }
+
+  .sl-markdown-content .mermaid-fallback {
+    display: none;
+  }
+
+  .sl-markdown-content .mermaid-shell {
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 1rem;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at top, color-mix(in srgb, var(--sl-color-accent) 16%, transparent), transparent 40%),
+      linear-gradient(180deg, color-mix(in srgb, var(--sl-color-black) 92%, var(--sl-color-accent-low)) 0%, var(--sl-color-black) 100%);
+    box-shadow: var(--sl-shadow-sm);
+  }
+
+  .sl-markdown-content .mermaid-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--sl-color-hairline-shade);
+    background: color-mix(in srgb, var(--sl-color-bg-nav) 92%, transparent);
+  }
+
+  .sl-markdown-content .mermaid-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .sl-markdown-content .mermaid-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
+    color: var(--sl-color-accent-high);
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 35%, var(--sl-color-hairline-shade));
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .sl-markdown-content .mermaid-hint {
+    color: var(--sl-color-gray-3);
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content .mermaid-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .sl-markdown-content .mermaid-control {
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.6rem;
+    background: color-mix(in srgb, var(--sl-color-bg-nav) 90%, transparent);
+    color: var(--sl-color-white);
+    padding: 0.4rem 0.65rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    min-width: 3rem;
+  }
+
+  .sl-markdown-content .mermaid-control:hover {
+    background: color-mix(in srgb, var(--sl-color-accent) 18%, var(--sl-color-bg-nav));
+    border-color: color-mix(in srgb, var(--sl-color-accent) 45%, var(--sl-color-hairline-shade));
+  }
+
+  .sl-markdown-content .mermaid-control:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .sl-markdown-content .mermaid-stage {
+    padding: 1rem;
+    overflow: hidden;
+  }
+
+  .sl-markdown-content .mermaid-loading,
+  .sl-markdown-content .mermaid-error {
+    border: 1px dashed var(--sl-color-hairline-shade);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    color: var(--sl-color-gray-3);
+    background: color-mix(in srgb, var(--sl-color-bg) 82%, transparent);
+  }
+
+  .sl-markdown-content .mermaid-error strong {
+    display: block;
+    margin-bottom: 0.35rem;
+    color: var(--sl-color-text);
+  }
+
+  .sl-markdown-content .mermaid-svg {
+    display: flex;
+    justify-content: center;
+  }
+
+  .sl-markdown-content .mermaid-svg svg {
+    width: auto;
+    height: auto;
+    max-width: none;
+    display: block;
+  }
+
+  .sl-markdown-content .mermaid-viewport {
+    position: relative;
+    overflow: hidden;
+    min-height: min(70vh, 42rem);
+    max-height: 75vh;
+    border: 1px dashed var(--sl-color-hairline-shade);
+    border-radius: 0.9rem;
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--sl-color-hairline-shade) 28%, transparent) 1px, transparent 1px),
+      linear-gradient(color-mix(in srgb, var(--sl-color-hairline-shade) 28%, transparent) 1px, transparent 1px),
+      color-mix(in srgb, var(--sl-color-bg) 88%, transparent);
+    background-size: 24px 24px, 24px 24px, auto;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .sl-markdown-content .mermaid-viewport.is-dragging {
+    cursor: grabbing;
+  }
+
+  .sl-markdown-content .mermaid-canvas {
+    position: absolute;
+    inset: 0 auto auto 0;
+    transform-origin: top left;
+    will-change: transform;
+  }
+
+  .sl-markdown-content .mermaid-shell:fullscreen {
+    padding: 1rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--sl-color-black);
+  }
+
+  .sl-markdown-content .mermaid-shell:fullscreen .mermaid-toolbar {
+    border-radius: 0.75rem 0.75rem 0 0;
+  }
+
+  .sl-markdown-content .mermaid-shell:fullscreen .mermaid-stage {
+    height: calc(100vh - 10rem);
+    padding: 0.75rem 0;
+  }
+
+  .sl-markdown-content .mermaid-shell:fullscreen .mermaid-viewport {
+    min-height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  .sl-markdown-content .mermaid-shell:fullscreen .mermaid-source-panel {
+    max-height: 22vh;
+    overflow: auto;
+  }
+
+  .sl-markdown-content .mermaid-source-panel {
+    border-top: 1px solid var(--sl-color-hairline-shade);
+    background: color-mix(in srgb, var(--sl-color-bg-nav) 70%, transparent);
+  }
+
+  .sl-markdown-content .mermaid-source-panel summary {
+    cursor: pointer;
+    padding: 0.8rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    user-select: none;
+  }
+
+  .sl-markdown-content .mermaid-source-panel summary:hover {
+    color: var(--sl-color-white);
+  }
+
+  .sl-markdown-content .mermaid-source-panel pre {
+    margin: 0;
+    border-radius: 0;
+    border: 0;
+  }
+
+  @media (max-width: 50rem) {
+    .sl-markdown-content .mermaid-hint {
+      display: none;
+    }
+
+    .sl-markdown-content .mermaid-viewport {
+      min-height: 24rem;
+      max-height: 65vh;
+    }
+  }
+</style>

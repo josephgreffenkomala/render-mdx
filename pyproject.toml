@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "render-mdx"
+version = "0.1.0"
+description = "Local MDX renderer with a web picker and live sync."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+render-mdx = "render_mdx.cli:main"
+
+[tool.setuptools]
+packages = ["render_mdx"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+render_mdx = [
+  "app_template/package.json",
+  "app_template/package-lock.json",
+  "app_template/astro.config.mjs",
+  "app_template/tsconfig.json",
+  "app_template/src/**/*",
+]

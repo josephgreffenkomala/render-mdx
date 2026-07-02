@@ -1,0 +1,330 @@
+---
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+import { Icon } from '@astrojs/starlight/components';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<div class="page sl-flex">
+	<header class="header"><slot name="header" /></header>
+	{
+		hasSidebar && (
+			<>
+				<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+					<MobileMenuToggle />
+					<div id="starlight__sidebar" class="sidebar-pane">
+						<div class="sidebar-content sl-flex">
+							<slot name="sidebar" />
+						</div>
+					</div>
+				</nav>
+				<desktop-sidebar-toggle class="desktop-sidebar-toggle print:hidden">
+					<button type="button" aria-label="Toggle left sidebar" aria-pressed="false">
+						<span class="collapse-icon"><Icon name="left-caret" /></span>
+						<span class="expand-icon"><Icon name="right-caret" /></span>
+					</button>
+				</desktop-sidebar-toggle>
+			</>
+		)
+	}
+	<div class="main-frame"><slot /></div>
+	<content-fullscreen-toggle class="content-fullscreen-toggle print:hidden">
+		<button type="button" aria-label="Toggle content fullscreen" aria-pressed="false">
+			<span class="expand-icon"><Icon name="window" /></span>
+			<span class="restore-icon"><Icon name="close" /></span>
+		</button>
+	</content-fullscreen-toggle>
+</div>
+
+<script>
+	class ContentFullscreenToggle extends HTMLElement {
+		static storageKey = 'starlight:content-fullscreen';
+		btn = this.querySelector('button');
+
+		connectedCallback() {
+			this.syncFromStorage();
+			this.btn?.addEventListener('click', this.onClick);
+			window.addEventListener('storage', this.onStorage);
+			this.syncButton();
+		}
+
+		disconnectedCallback() {
+			this.btn?.removeEventListener('click', this.onClick);
+			window.removeEventListener('storage', this.onStorage);
+		}
+
+		onClick = () => {
+			const enabled = document.documentElement.dataset.contentFullscreen === 'true';
+			this.setFullscreen(!enabled);
+		};
+
+		onStorage = (event) => {
+			if (event.key === ContentFullscreenToggle.storageKey) this.syncFromStorage();
+		};
+
+		syncFromStorage() {
+			const enabled = window.localStorage.getItem(ContentFullscreenToggle.storageKey) === 'true';
+			this.setFullscreen(enabled, false);
+		}
+
+		setFullscreen(enabled, persist = true) {
+			document.documentElement.dataset.contentFullscreen = enabled ? 'true' : 'false';
+			if (persist) {
+				window.localStorage.setItem(ContentFullscreenToggle.storageKey, enabled ? 'true' : 'false');
+			}
+			this.syncButton();
+			window.dispatchEvent(new Event('resize'));
+		}
+
+		syncButton() {
+			const enabled = document.documentElement.dataset.contentFullscreen === 'true';
+			this.btn?.setAttribute('aria-pressed', String(enabled));
+			this.btn?.setAttribute('title', enabled ? 'Exit content fullscreen' : 'Make content fullscreen');
+			this.btn?.setAttribute(
+				'aria-label',
+				enabled ? 'Exit content fullscreen' : 'Make content fullscreen'
+			);
+		}
+	}
+
+	if (!customElements.get('content-fullscreen-toggle')) {
+		customElements.define('content-fullscreen-toggle', ContentFullscreenToggle);
+	}
+
+	class DesktopSidebarToggle extends HTMLElement {
+		static storageKey = 'starlight:left-sidebar-collapsed';
+		btn = this.querySelector('button');
+
+		connectedCallback() {
+			this.syncFromStorage();
+			this.btn?.addEventListener('click', this.onClick);
+			window.addEventListener('storage', this.onStorage);
+			this.syncButton();
+		}
+
+		disconnectedCallback() {
+			this.btn?.removeEventListener('click', this.onClick);
+			window.removeEventListener('storage', this.onStorage);
+		}
+
+		onClick = () => {
+			const collapsed = document.documentElement.dataset.leftSidebarCollapsed === 'true';
+			this.setCollapsed(!collapsed);
+		};
+
+		onStorage = (event) => {
+			if (event.key === DesktopSidebarToggle.storageKey) this.syncFromStorage();
+		};
+
+		syncFromStorage() {
+			const collapsed = window.localStorage.getItem(DesktopSidebarToggle.storageKey) === 'true';
+			this.setCollapsed(collapsed, false);
+		}
+
+		setCollapsed(collapsed, persist = true) {
+			document.documentElement.dataset.leftSidebarCollapsed = collapsed ? 'true' : 'false';
+			if (persist) {
+				window.localStorage.setItem(DesktopSidebarToggle.storageKey, collapsed ? 'true' : 'false');
+			}
+			this.syncButton();
+		}
+
+		syncButton() {
+			const collapsed = document.documentElement.dataset.leftSidebarCollapsed === 'true';
+			this.btn?.setAttribute('aria-pressed', String(collapsed));
+			this.btn?.setAttribute('title', collapsed ? 'Expand left sidebar' : 'Collapse left sidebar');
+		}
+	}
+
+	if (!customElements.get('desktop-sidebar-toggle')) {
+		customElements.define('desktop-sidebar-toggle', DesktopSidebarToggle);
+	}
+</script>
+
+<style>
+	@layer starlight.core {
+		.page {
+			flex-direction: column;
+			min-height: 100vh;
+		}
+
+		.header {
+			z-index: var(--sl-z-index-navbar);
+			position: fixed;
+			inset-inline-start: 0;
+			inset-block-start: 0;
+			width: 100%;
+			height: var(--sl-nav-height);
+			border-bottom: 1px solid var(--sl-color-hairline-shade);
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			padding-inline-end: var(--sl-nav-pad-x);
+			background-color: var(--sl-color-bg-nav);
+		}
+
+		:global([data-has-sidebar]) .header {
+			padding-inline-end: calc(
+				var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+			);
+		}
+
+		.sidebar-pane {
+			visibility: var(--sl-sidebar-visibility, hidden);
+			position: fixed;
+			z-index: var(--sl-z-index-menu);
+			inset-block: var(--sl-nav-height) 0;
+			inset-inline-start: 0;
+			width: 100%;
+			background-color: var(--sl-color-black);
+			overflow-y: auto;
+			scrollbar-gutter: stable;
+		}
+
+		:global([aria-expanded='true']) ~ .sidebar-pane {
+			--sl-sidebar-visibility: visible;
+		}
+
+		.sidebar-content {
+			height: 100%;
+			min-height: max-content;
+			padding: 1rem var(--sl-sidebar-pad-x) 0;
+			flex-direction: column;
+			gap: 1rem;
+		}
+
+		.main-frame {
+			padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+			padding-inline-start: var(--sl-content-inline-start);
+		}
+
+		.desktop-sidebar-toggle {
+			display: none;
+		}
+
+		.content-fullscreen-toggle {
+			display: none;
+		}
+
+		@media (min-width: 50rem) {
+			.sidebar-content::after {
+				content: '';
+				padding-bottom: 1px;
+			}
+
+			:global([data-has-sidebar]) .header {
+				padding-inline-end: var(--sl-nav-pad-x);
+			}
+
+			.sidebar-pane {
+				--sl-sidebar-visibility: visible;
+				width: var(--sl-sidebar-width);
+				background-color: var(--sl-color-bg-sidebar);
+				border-inline-end: 1px solid var(--sl-color-hairline-shade);
+				transition: transform 180ms ease, visibility 180ms ease;
+			}
+
+			.main-frame {
+				transition: padding-inline-start 180ms ease;
+			}
+
+			.desktop-sidebar-toggle {
+				display: block;
+			}
+
+			.content-fullscreen-toggle {
+				display: block;
+			}
+
+			.desktop-sidebar-toggle button,
+			.content-fullscreen-toggle button {
+				position: fixed;
+				z-index: calc(var(--sl-z-index-navbar) + 1);
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				width: 2rem;
+				height: 2rem;
+				padding: 0;
+				border: 1px solid var(--sl-color-hairline-shade);
+				border-radius: 999px;
+				background: var(--sl-color-bg-nav);
+				color: var(--sl-color-white);
+				box-shadow: var(--sl-shadow-sm);
+				cursor: pointer;
+				transition: inset-inline-start 180ms ease, background-color 180ms ease;
+			}
+
+			.desktop-sidebar-toggle button {
+				top: calc(var(--sl-nav-height) + 1rem);
+				inset-inline-start: calc(var(--sl-sidebar-width) - 1rem);
+			}
+
+			.content-fullscreen-toggle button {
+				inset-inline-end: 1rem;
+				inset-block-end: 1rem;
+				transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+			}
+
+			.desktop-sidebar-toggle button:hover,
+			.content-fullscreen-toggle button:hover {
+				background: var(--sl-color-black);
+			}
+
+			.desktop-sidebar-toggle .expand-icon,
+			.content-fullscreen-toggle .restore-icon {
+				display: none;
+			}
+
+			:global(:root[data-left-sidebar-collapsed='true'][data-has-sidebar]) {
+				--sl-content-inline-start: 0rem;
+			}
+
+			:global(:root[data-left-sidebar-collapsed='true']) .sidebar-pane {
+				transform: translateX(calc(-1 * var(--sl-sidebar-width)));
+				visibility: hidden;
+			}
+
+			:global(:root[data-left-sidebar-collapsed='true']) .desktop-sidebar-toggle button {
+				inset-inline-start: 0.75rem;
+			}
+
+			:global(:root[data-left-sidebar-collapsed='true']) .desktop-sidebar-toggle .collapse-icon {
+				display: none;
+			}
+
+			:global(:root[data-left-sidebar-collapsed='true']) .desktop-sidebar-toggle .expand-icon {
+				display: inline-flex;
+			}
+
+			:global(:root[data-content-fullscreen='true']) {
+				--sl-content-inline-start: 0rem;
+				--__toc-width: 0rem;
+			}
+
+			:global(:root[data-content-fullscreen='true']) .main-frame {
+				padding-inline-start: 0;
+			}
+
+			:global(:root[data-content-fullscreen='true']) .sidebar-pane {
+				transform: translateX(calc(-1 * var(--sl-sidebar-width)));
+				visibility: hidden;
+			}
+
+			:global(:root[data-content-fullscreen='true']) .desktop-sidebar-toggle {
+				display: none;
+			}
+
+			:global(:root[data-content-fullscreen='true']) .content-fullscreen-toggle button {
+				border-color: color-mix(in srgb, var(--sl-color-accent) 55%, var(--sl-color-hairline-shade));
+				color: var(--sl-color-accent-high);
+			}
+
+			:global(:root[data-content-fullscreen='true']) .content-fullscreen-toggle .expand-icon {
+				display: none;
+			}
+
+			:global(:root[data-content-fullscreen='true']) .content-fullscreen-toggle .restore-icon {
+				display: inline-flex;
+			}
+		}
+	}
+</style>

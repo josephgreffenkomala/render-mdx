@@ -1,0 +1,333 @@
+---
+const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
+---
+
+<section class="picker" data-api-url={apiUrl}>
+  <section class="picker__hero">
+    <header class="picker__header">
+      <div class="picker__brand">
+        <span class="picker__logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h10l6 6v10a0 0 0 0 1 0 0H4z" />
+            <path d="M14 4v6h6" />
+            <path d="M8 15h8M8 18h5" />
+          </svg>
+        </span>
+        <div class="picker__brand-text">
+          <span class="picker__eyebrow">Local MDX workspace</span>
+          <h1>Turn scattered notes into rendered docs.</h1>
+          <p>Browse local folders, save the files you care about, and open the rendered output in one click.</p>
+        </div>
+      </div>
+      <div class="picker__header-actions">
+        <button class="picker__browse" type="button">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Browse files
+        </button>
+        <button class="picker__icon-btn picker__refresh" type="button" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+            <path d="M21 3v5h-5" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="picker__hero-meta">
+      <div class="picker__stat">
+        <span class="picker__stat-label">Workflow</span>
+        <strong>Browse</strong>
+        <span>Pick a local <code>.mdx</code> file from disk.</span>
+      </div>
+      <div class="picker__stat">
+        <span class="picker__stat-label">Library</span>
+        <strong>Save</strong>
+        <span>Keep a reusable list of documents in this workspace.</span>
+      </div>
+      <div class="picker__stat">
+        <span class="picker__stat-label">Output</span>
+        <strong>Open</strong>
+        <span>Launch the rendered page as soon as it is available.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="picker__list-section">
+    <div class="picker__list-head">
+      <div class="picker__list-title">
+        <h2>Saved files</h2>
+        <p>Your current render set.</p>
+      </div>
+      <span class="picker__count"></span>
+      <div class="picker__search">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
+        </svg>
+        <input class="picker__search-input" type="text" placeholder="Filter by path…" autocomplete="off" />
+      </div>
+    </div>
+    <div class="picker__files" role="list"></div>
+  </section>
+
+  <p class="picker__status" role="status"></p>
+
+  <div class="picker__modal" hidden>
+    <div class="picker__modal-card">
+      <div class="picker__modal-head">
+        <div class="picker__modal-title">
+          <span class="picker__modal-eyebrow">Browsing</span>
+          <strong class="picker__cwd"></strong>
+        </div>
+        <button class="picker__icon-btn picker__modal-close" type="button" aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+      <form class="picker__goto">
+        <input class="picker__goto-input" type="text" autocomplete="off" placeholder="Go to folder, e.g. /home/you/docs" />
+        <button class="picker__goto-go" type="submit">Go</button>
+      </form>
+      <div class="picker__entries" role="list"></div>
+    </div>
+  </div>
+</section>
+
+<script define:vars={{ apiUrl }}>
+  const root = document.querySelector('.picker');
+  const browseButton = root?.querySelector('.picker__browse');
+  const refreshButton = root?.querySelector('.picker__refresh');
+  const modal = root?.querySelector('.picker__modal');
+  const modalClose = root?.querySelector('.picker__modal-close');
+  const cwd = root?.querySelector('.picker__cwd');
+  const entries = root?.querySelector('.picker__entries');
+  const files = root?.querySelector('.picker__files');
+  const countLabel = root?.querySelector('.picker__count');
+  const status = root?.querySelector('.picker__status');
+  const gotoForm = root?.querySelector('.picker__goto');
+  const gotoInput = root?.querySelector('.picker__goto-input');
+  const searchInput = root?.querySelector('.picker__search-input');
+  let currentPath = '';
+  let lastSources = [];
+  let lastDocuments = [];
+  let isLoading = false;
+
+  function setStatus(message, isError = false) {
+    if (!status) return;
+    status.textContent = message;
+    status.dataset.error = String(isError);
+  }
+
+  function setLoading(next) {
+    isLoading = next;
+    root?.toggleAttribute('data-loading', next);
+    refreshButton?.toggleAttribute('disabled', next);
+  }
+
+  async function request(path, options = {}) {
+    const response = await fetch(`${apiUrl}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Request failed');
+    return payload;
+  }
+
+  function empty(container, message, icon = '') {
+    if (!container) return;
+    container.innerHTML = '';
+    const node = document.createElement('div');
+    node.className = 'picker__empty';
+    node.innerHTML = `${icon}<span></span>`;
+    node.querySelector('span').textContent = message;
+    container.append(node);
+  }
+
+  async function loadState() {
+    setLoading(true);
+    try {
+      const state = await request('/api/state');
+      lastSources = state.sources || [];
+      lastDocuments = state.documents || [];
+      renderFiles(lastSources, lastDocuments);
+      if (state.errors?.length) {
+        setStatus(state.errors.join('\n'), true);
+      } else if (!status?.textContent || status.dataset.error === 'true') {
+        setStatus('Ready.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function browse(path = '') {
+    const suffix = path ? `?path=${encodeURIComponent(path)}` : '';
+    const payload = await request(`/api/browse${suffix}`);
+    currentPath = payload.path;
+    if (cwd) cwd.textContent = payload.path;
+    if (gotoInput) gotoInput.value = payload.path;
+    renderEntries(payload.entries);
+  }
+
+  function openModal() {
+    if (modal) modal.hidden = false;
+    setStatus('Loading folders…');
+    browse(currentPath).catch((error) => setStatus(error.message, true));
+  }
+
+  function closeModal() {
+    if (modal) modal.hidden = true;
+  }
+
+  const FOLDER_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>`;
+  const FILE_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h10l6 6v10H4z" /><path d="M14 4v6h6" /></svg>`;
+  const UP_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>`;
+
+  function renderEntries(items) {
+    if (!entries) return;
+    entries.innerHTML = '';
+    if (!items.length) {
+      empty(entries, 'No MDX files in this folder.', FILE_ICON);
+      return;
+    }
+    for (const item of items) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'picker__entry';
+      if (item.up) row.classList.add('picker__entry--up');
+      row.dataset.kind = item.kind;
+      const icon = item.up ? UP_ICON : item.kind === 'directory' ? FOLDER_ICON : FILE_ICON;
+      row.innerHTML = `<span class="picker__entry-icon">${icon}</span><span class="picker__entry-name"></span><span class="picker__entry-kind"></span>`;
+      row.querySelector('.picker__entry-name').textContent = item.name;
+      row.querySelector('.picker__entry-kind').textContent = item.kind === 'directory' ? 'Folder' : 'MDX';
+      row.addEventListener('click', () => {
+        if (item.kind === 'directory') {
+          browse(item.path).catch((error) => setStatus(error.message, true));
+        } else {
+          addFile(item.path);
+        }
+      });
+      entries.append(row);
+    }
+  }
+
+  async function addFile(path) {
+    try {
+      await request('/api/add', { method: 'POST', body: JSON.stringify({ path }) });
+      await loadState();
+      setStatus('File saved. Click Open to view it.');
+      closeModal();
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  }
+
+  async function removeFile(path) {
+    try {
+      await request('/api/remove', { method: 'POST', body: JSON.stringify({ path }) });
+      await loadState();
+      setStatus('File removed.');
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  }
+
+  function baseName(p) {
+    const parts = String(p).split('/');
+    return parts[parts.length - 1] || p;
+  }
+
+  function dirName(p) {
+    const parts = String(p).split('/');
+    parts.pop();
+    return parts.join('/');
+  }
+
+  function renderFiles(sources, documents) {
+    if (!files) return;
+    files.innerHTML = '';
+    const docByPath = new Map((documents || []).map((doc) => [doc.path, doc]));
+    if (countLabel) countLabel.textContent = `${sources.length}`;
+    const query = (searchInput?.value || '').trim().toLowerCase();
+    const filtered = query
+      ? sources.filter((s) => s.path.toLowerCase().includes(query))
+      : sources;
+    if (!sources.length) {
+      empty(
+        files,
+        'No saved files yet. Use Browse files to pick your first .mdx document.',
+        `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h10l6 6v10H4z" /><path d="M14 4v6h6" /><path d="M8 16h8" /></svg>`
+      );
+      return;
+    }
+    if (!filtered.length) {
+      empty(files, `No files match “${query}”.`, FILE_ICON);
+      return;
+    }
+    for (const source of filtered) {
+      const doc = docByPath.get(source.path);
+      const row = document.createElement('div');
+      row.className = 'picker__file';
+      row.innerHTML = `
+        <span class="picker__file-icon">${FILE_ICON}</span>
+        <span class="picker__file-text">
+          <span class="picker__file-name"></span>
+          <span class="picker__file-dir"></span>
+        </span>
+        <span class="picker__file-actions">
+          <a class="picker__file-open" target="_blank" rel="noopener">Open</a>
+          <button type="button" class="picker__file-remove" aria-label="Remove">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+          </button>
+        </span>
+      `;
+      row.querySelector('.picker__file-name').textContent = baseName(source.path);
+      row.querySelector('.picker__file-dir').textContent = dirName(source.path);
+      const openLink = row.querySelector('.picker__file-open');
+      if (doc) {
+        openLink.href = doc.url;
+      } else {
+        openLink.classList.add('is-disabled');
+        openLink.setAttribute('aria-disabled', 'true');
+        openLink.textContent = 'Waiting';
+        openLink.title = 'Not rendered yet. Click Refresh.';
+      }
+      row.querySelector('.picker__file-remove').addEventListener('click', () => removeFile(source.path));
+      files.append(row);
+    }
+  }
+
+  browseButton?.addEventListener('click', openModal);
+  modalClose?.addEventListener('click', closeModal);
+  modal?.addEventListener('click', (event) => {
+    if (event.target === modal) closeModal();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && modal && !modal.hidden) closeModal();
+  });
+
+  refreshButton?.addEventListener('click', async () => {
+    if (isLoading) return;
+    try {
+      await loadState();
+      setStatus('Refreshed.');
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
+  gotoForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const path = gotoInput?.value?.trim();
+    if (path) browse(path).catch((error) => setStatus(error.message, true));
+  });
+
+  searchInput?.addEventListener('input', () => {
+    renderFiles(lastSources, lastDocuments);
+  });
+
+  loadState().catch((error) => setStatus(error.message, true));
+</script>

@@ -1,0 +1,20 @@
+---
+import SourcePicker from '../components/SourcePicker.astro';
+import '../styles/starlight-base.css';
+import '@astrojs/starlight/style/markdown.css';
+import '../styles/custom.css';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>render-mdx</title>
+  </head>
+  <body data-theme="light">
+    <main class="app">
+      <SourcePicker />
+    </main>
+  </body>
+</html>

@@ -1,0 +1,183 @@
+---
+import MobileTableOfContents from 'virtual:starlight/components/MobileTableOfContents';
+import TableOfContents from 'virtual:starlight/components/TableOfContents';
+import { Icon } from '@astrojs/starlight/components';
+---
+
+{
+	Astro.locals.starlightRoute.toc && (
+		<>
+			<div class="lg:sl-hidden">
+				<MobileTableOfContents />
+			</div>
+			<desktop-toc-toggle class="desktop-toc-toggle print:hidden">
+				<button type="button" aria-label="Toggle right sidebar" aria-pressed="false">
+					<span class="collapse-icon"><Icon name="right-caret" /></span>
+					<span class="expand-icon"><Icon name="left-caret" /></span>
+				</button>
+			</desktop-toc-toggle>
+			<div class="right-sidebar-panel sl-hidden lg:sl-block">
+				<div class="sl-container">
+					<TableOfContents />
+				</div>
+			</div>
+		</>
+	)
+}
+
+<script>
+	class DesktopTocToggle extends HTMLElement {
+		static storageKey = 'starlight:right-sidebar-collapsed';
+		btn = this.querySelector('button');
+
+		connectedCallback() {
+			this.syncFromStorage();
+			this.btn?.addEventListener('click', this.onClick);
+			window.addEventListener('storage', this.onStorage);
+			this.syncButton();
+		}
+
+		disconnectedCallback() {
+			this.btn?.removeEventListener('click', this.onClick);
+			window.removeEventListener('storage', this.onStorage);
+		}
+
+		onClick = () => {
+			const collapsed = document.documentElement.dataset.rightSidebarCollapsed === 'true';
+			this.setCollapsed(!collapsed);
+		};
+
+		onStorage = (event) => {
+			if (event.key === DesktopTocToggle.storageKey) this.syncFromStorage();
+		};
+
+		syncFromStorage() {
+			const collapsed = window.localStorage.getItem(DesktopTocToggle.storageKey) === 'true';
+			this.setCollapsed(collapsed, false);
+		}
+
+		setCollapsed(collapsed, persist = true) {
+			document.documentElement.dataset.rightSidebarCollapsed = collapsed ? 'true' : 'false';
+			if (persist) {
+				window.localStorage.setItem(DesktopTocToggle.storageKey, collapsed ? 'true' : 'false');
+			}
+			this.syncButton();
+		}
+
+		syncButton() {
+			const collapsed = document.documentElement.dataset.rightSidebarCollapsed === 'true';
+			this.btn?.setAttribute('aria-pressed', String(collapsed));
+			this.btn?.setAttribute('title', collapsed ? 'Expand right sidebar' : 'Collapse right sidebar');
+		}
+	}
+
+	if (!customElements.get('desktop-toc-toggle')) {
+		customElements.define('desktop-toc-toggle', DesktopTocToggle);
+	}
+</script>
+
+<style>
+	@layer starlight.core {
+		.right-sidebar-panel {
+			padding: 1rem var(--sl-sidebar-pad-x);
+			transition: opacity 180ms ease;
+		}
+
+		.sl-container {
+			width: calc(var(--sl-sidebar-width) - 2 * var(--sl-sidebar-pad-x));
+		}
+
+		.right-sidebar-panel :global(h2) {
+			color: var(--sl-color-white);
+			font-size: var(--sl-text-h5);
+			font-weight: 600;
+			line-height: var(--sl-line-height-headings);
+			margin-bottom: 0.5rem;
+		}
+
+		.right-sidebar-panel :global(:where(a)) {
+			display: block;
+			font-size: var(--sl-text-xs);
+			text-decoration: none;
+			color: var(--sl-color-gray-3);
+			overflow-wrap: anywhere;
+		}
+
+		.right-sidebar-panel :global(:where(a):hover) {
+			color: var(--sl-color-white);
+		}
+
+		.desktop-toc-toggle {
+			display: none;
+		}
+
+		@media (min-width: 72rem) {
+			.sl-container {
+				max-width: calc((((100vw - var(--sl-sidebar-width) - 2 * var(--sl-content-pad-x) - 2 * var(--sl-sidebar-pad-x)) * 0.25)));
+			}
+
+			.desktop-toc-toggle {
+				display: block;
+			}
+
+			.desktop-toc-toggle button {
+				position: fixed;
+				top: calc(var(--sl-nav-height) + 1rem);
+				inset-inline-end: calc(var(--sl-sidebar-width) - 0.9rem);
+				z-index: calc(var(--sl-z-index-navbar) + 1);
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				width: 1.8rem;
+				height: 1.8rem;
+				padding: 0;
+				border: 1px solid var(--sl-color-hairline-shade);
+				border-radius: 999px;
+				background: var(--sl-color-bg-nav);
+				color: var(--sl-color-white);
+				box-shadow: var(--sl-shadow-sm);
+				cursor: pointer;
+				transition: inset-inline-end 180ms ease, background-color 180ms ease;
+			}
+
+			.desktop-toc-toggle button:hover {
+				background: var(--sl-color-black);
+			}
+
+			.desktop-toc-toggle .expand-icon {
+				display: none;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .desktop-toc-toggle button {
+				inset-inline-end: 0.75rem;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .desktop-toc-toggle .collapse-icon {
+				display: none;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .desktop-toc-toggle .expand-icon {
+				display: inline-flex;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .right-sidebar-panel {
+				opacity: 0;
+				pointer-events: none;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .right-sidebar-container {
+				width: 0 !important;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true']) .right-sidebar {
+				transform: translateX(100%);
+				overflow: hidden;
+				border-inline-start: 0;
+			}
+
+			:global(:root[data-right-sidebar-collapsed='true'][data-has-sidebar][data-has-toc]) .main-pane {
+				width: 100% !important;
+			}
+		}
+	}
+</style>
