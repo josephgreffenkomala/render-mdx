@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
@@ -26,5 +27,12 @@ export default defineConfig({
       rehypePlugins: [rehypeMermaidBlocks],
     }),
     syntaxHighlight: 'shiki',
+  },
+  vite: {
+    resolve: {
+      alias: {
+        '@mdx-components': fileURLToPath(new URL('./src/components/mdx/index.ts', import.meta.url)),
+      },
+    },
   },
 });
