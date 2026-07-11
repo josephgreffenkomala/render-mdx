@@ -1,8 +1,29 @@
 ---
 import '@astrojs/starlight/style/markdown.css';
+
+const apiUrl = import.meta.env.RENDER_MDX_API_URL || 'http://127.0.0.1:8765';
 ---
 
 <div class="sl-markdown-content"><slot /></div>
+
+<dialog class="rmx-note-dialog" data-note-dialog>
+  <form method="dialog" data-note-form>
+    <div class="rmx-note-dialog__header">
+      <div>
+        <span class="rmx-note-dialog__eyebrow">Revision note</span>
+        <strong>Add feedback to this MDX file</strong>
+      </div>
+      <button type="button" class="rmx-note-dialog__close" data-note-cancel aria-label="Close">×</button>
+    </div>
+    <p class="rmx-note-dialog__context" data-note-context></p>
+    <textarea data-note-input rows="5" maxlength="10000" required placeholder="What should the agent revise, clarify, remove, or add?"></textarea>
+    <p class="rmx-note-dialog__status" data-note-status aria-live="polite"></p>
+    <div class="rmx-note-dialog__actions">
+      <button type="button" data-note-cancel>Cancel</button>
+      <button type="submit" class="rmx-note-dialog__save">Save to MDX</button>
+    </div>
+  </form>
+</dialog>
 
 <script type="module">
   import mermaid from 'mermaid';
@@ -384,7 +405,571 @@ import '@astrojs/starlight/style/markdown.css';
   });
 </script>
 
+<script define:vars={{ apiUrl }}>
+  const content = document.querySelector('.sl-markdown-content');
+  const dialog = document.querySelector('[data-note-dialog]');
+  const noteForm = dialog?.querySelector('[data-note-form]');
+  const noteInput = dialog?.querySelector('[data-note-input]');
+  const noteContext = dialog?.querySelector('[data-note-context]');
+  const noteStatus = dialog?.querySelector('[data-note-status]');
+  const saveButton = dialog?.querySelector('.rmx-note-dialog__save');
+  let currentDocument = null;
+  let activeTarget = null;
+  let activeContext = '';
+
+  function normalizedPath(value) {
+    const path = new URL(value, window.location.origin).pathname;
+    return path.endsWith('/') ? path : `${path}/`;
+  }
+
+  async function apiRequest(path, options = {}) {
+    const response = await fetch(`${apiUrl}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Request failed');
+    return payload;
+  }
+
+  function normalizedText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function targetKind(target) {
+    if (/^H[1-6]$/.test(target.tagName)) return 'heading';
+    if (target.matches('p')) return 'paragraph';
+    if (target.matches('ul, ol')) return 'list';
+    if (target.matches('pre')) return 'code block';
+    if (target.matches('table')) return 'table';
+    if (target.matches('blockquote')) return 'quote';
+    if (target.matches('details')) return 'details';
+    if (target.matches('mermaid-diagram')) return 'diagram';
+    if (target.matches('.card, .sl-link-card')) return 'card';
+    if (target.matches('.starlight-aside')) return 'aside';
+    if (target.matches('starlight-file-tree')) return 'file tree';
+    if (target.matches('starlight-tabs')) return 'tabs';
+    return 'content block';
+  }
+
+  function headingPath(target, headings) {
+    const stack = [];
+    for (const heading of headings) {
+      if (heading !== target && !(heading.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+        continue;
+      }
+      const level = Number(heading.tagName.slice(1));
+      while (stack.length && stack.at(-1).level >= level) stack.pop();
+      stack.push({ level, text: normalizedText(heading.textContent) });
+      if (heading === target) break;
+    }
+    const path = stack.filter((item) => item.level > 1).map((item) => item.text);
+    return path.join(' › ') || stack.at(-1)?.text || 'Document';
+  }
+
+  function describeTargets(targets) {
+    const headings = [...content.querySelectorAll('h1, h2, h3, h4, h5, h6')];
+    const counts = new Map();
+    for (const target of targets) {
+      const section = headingPath(target, headings);
+      const kind = targetKind(target);
+      const countKey = `${section}\u0000${kind}`;
+      const position = (counts.get(countKey) || 0) + 1;
+      counts.set(countKey, position);
+      const excerpt = normalizedText(target.innerText || target.textContent).slice(0, 140);
+      const label = `${section} › ${kind} ${position}${excerpt ? ` — “${excerpt}”` : ''}`;
+      target.dataset.rmxNoteTarget = label;
+    }
+  }
+
+  function noteTargets() {
+    if (!content) return [];
+    const revisionHeading = [...content.querySelectorAll('h2')].find(
+      (heading) => heading.textContent.trim().toLowerCase() === 'revision notes'
+    );
+    const candidates = [
+      ...content.querySelectorAll(
+        ':scope > :is(h1, h2, h3, h4, h5, h6, p, ul, ol, pre, table, blockquote, details, mermaid-diagram), :scope > * :is(.card, .sl-link-card, .starlight-aside, starlight-file-tree, starlight-tabs)'
+      ),
+    ];
+    return candidates.filter((target) => !revisionHeading || target.compareDocumentPosition(revisionHeading) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }
+
+  function revisionNoteContext(blockquote) {
+    const targetLabel = [...blockquote.querySelectorAll('strong')].find(
+      (strong) => normalizedText(strong.textContent).toLowerCase() === 'target:'
+    );
+    if (!targetLabel?.parentElement) return '';
+    return normalizedText(targetLabel.parentElement.textContent.replace(targetLabel.textContent, ''));
+  }
+
+  function revisionNoteId(blockquote) {
+    return blockquote.querySelector('[data-rmx-note-id]')?.dataset.rmxNoteId || '';
+  }
+
+  function compactRevisionNote(blockquote, context) {
+    const noteId = revisionNoteId(blockquote);
+    const details = window.document.createElement('details');
+    details.className = 'rmx-inline-revision-note';
+    const summary = window.document.createElement('summary');
+    const title = window.document.createElement('span');
+    title.className = 'rmx-inline-revision-note__title';
+    title.textContent = 'Note';
+    const target = window.document.createElement('span');
+    target.className = 'rmx-inline-revision-note__target';
+    target.textContent = context.split(' — ', 1)[0];
+    target.title = context;
+    summary.append(title, target);
+
+    const revisionLabel = [...blockquote.querySelectorAll('strong')].find(
+      (strong) => normalizedText(strong.textContent).toLowerCase() === 'revision note'
+    );
+    const targetLabel = [...blockquote.querySelectorAll('strong')].find(
+      (strong) => normalizedText(strong.textContent).toLowerCase() === 'target:'
+    );
+    revisionLabel?.parentElement?.remove();
+    targetLabel?.parentElement?.remove();
+    blockquote.querySelector('[data-rmx-note-id]')?.remove();
+    blockquote.classList.add('rmx-inline-revision-note__content');
+
+    const actions = window.document.createElement('div');
+    actions.className = 'rmx-inline-revision-note__actions';
+    const deleteButton = window.document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'rmx-inline-revision-note__delete';
+    deleteButton.textContent = 'Delete note';
+    if (!noteId) {
+      deleteButton.disabled = true;
+      deleteButton.title = 'This older note has no deletion ID.';
+    } else {
+      deleteButton.addEventListener('click', async () => {
+        if (!window.confirm('Delete this revision note from the source MDX?')) return;
+        deleteButton.disabled = true;
+        deleteButton.textContent = 'Deleting…';
+        try {
+          await apiRequest('/api/notes/delete', {
+            method: 'POST',
+            body: JSON.stringify({ path: currentDocument.path, noteId }),
+          });
+          details.remove();
+        } catch (error) {
+          deleteButton.disabled = false;
+          deleteButton.textContent = 'Delete note';
+          deleteButton.title = error.message || 'Could not delete note.';
+        }
+      });
+    }
+    actions.append(deleteButton);
+    details.append(summary, blockquote, actions);
+    return details;
+  }
+
+  function findNoteTarget(context, targets) {
+    const exact = targets.find((target) => target.dataset.rmxNoteTarget === context);
+    if (exact) return exact;
+
+    const [legacySection, legacyExcerpt = ''] = context.split(' — ', 2);
+    const cleanExcerpt = normalizedText(legacyExcerpt).replace(/^[“"]|[”"]$/g, '');
+    return targets.find((target) => {
+      const label = target.dataset.rmxNoteTarget || '';
+      const targetText = normalizedText(target.innerText || target.textContent);
+      return label.includes(legacySection) && (!cleanExcerpt || targetText.includes(cleanExcerpt));
+    }) || null;
+  }
+
+  function placeRevisionNotes(targets) {
+    const revisionHeading = [...content.querySelectorAll('h2')].find(
+      (heading) => normalizedText(heading.textContent).toLowerCase() === 'revision notes'
+    );
+    if (!revisionHeading) return;
+    const notes = [...content.querySelectorAll('blockquote')].filter(
+      (blockquote) => revisionHeading.compareDocumentPosition(blockquote) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    const lastNoteByTarget = new Map();
+    let placed = 0;
+    for (const note of notes) {
+      const context = revisionNoteContext(note);
+      const target = findNoteTarget(context, targets);
+      if (!target) continue;
+      const compactNote = compactRevisionNote(note, context);
+      const previousNote = lastNoteByTarget.get(target);
+      if (previousNote) {
+        previousNote.after(compactNote);
+      } else if (target.matches('.card, .sl-link-card')) {
+        compactNote.classList.add('rmx-inline-revision-note--embedded');
+        target.append(compactNote);
+      } else {
+        target.after(compactNote);
+      }
+      lastNoteByTarget.set(target, compactNote);
+      placed += 1;
+    }
+    if (placed === notes.length) revisionHeading.remove();
+  }
+
+  function positionNoteButton(button, target) {
+    const contentRect = content.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetTop = targetRect.top - contentRect.top + content.scrollTop;
+    button.style.top = `${Math.max(0, targetTop - button.offsetHeight - 4)}px`;
+    button.hidden = false;
+  }
+
+  function installNoteButton(targets) {
+    if (!content) return;
+    if (!targets.length) return;
+    const button = window.document.createElement('button');
+    button.type = 'button';
+    button.className = 'rmx-add-note print:hidden';
+    button.textContent = '+ Note';
+    button.hidden = true;
+    button.title = 'Add a revision note to the source MDX';
+    content.append(button);
+    for (const target of targets) {
+      target.addEventListener('pointerenter', () => {
+        activeTarget = target;
+        activeContext = target.dataset.rmxNoteTarget;
+        positionNoteButton(button, target);
+      });
+    }
+    button.addEventListener('click', () => {
+      if (!currentDocument || !activeTarget || !dialog) {
+        return;
+      }
+      noteContext.textContent = activeContext;
+      noteStatus.textContent = '';
+      noteInput.value = '';
+      dialog.showModal();
+      noteInput.focus();
+    });
+    activeTarget = targets[0];
+    activeContext = activeTarget.dataset.rmxNoteTarget;
+    positionNoteButton(button, activeTarget);
+  }
+
+  async function loadCurrentDocument() {
+    try {
+      const state = await apiRequest('/api/state');
+      const currentPath = normalizedPath(window.location.pathname);
+      currentDocument = (state.documents || []).find(
+        (document) => normalizedPath(document.url) === currentPath
+      ) || null;
+      if (!currentDocument) return;
+      const targets = noteTargets();
+      describeTargets(targets);
+      placeRevisionNotes(targets);
+      installNoteButton(targets);
+    } catch (error) {
+      console.warn('render-mdx note controls unavailable:', error);
+    }
+  }
+
+  dialog?.querySelectorAll('[data-note-cancel]').forEach((button) => {
+    button.addEventListener('click', () => dialog.close());
+  });
+
+  noteForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!currentDocument || !noteInput?.value.trim()) return;
+    saveButton.disabled = true;
+    noteStatus.textContent = 'Saving…';
+    noteStatus.dataset.error = 'false';
+    try {
+      await apiRequest('/api/notes', {
+        method: 'POST',
+        body: JSON.stringify({
+          path: currentDocument.path,
+          context: activeContext,
+          note: noteInput.value,
+        }),
+      });
+      noteStatus.textContent = 'Saved to the source MDX. Reloading…';
+      window.setTimeout(() => window.location.reload(), 450);
+    } catch (error) {
+      noteStatus.textContent = error.message || 'Could not save note.';
+      noteStatus.dataset.error = 'true';
+      saveButton.disabled = false;
+    }
+  });
+
+  loadCurrentDocument();
+</script>
+
 <style is:global>
+  .sl-markdown-content {
+    position: relative;
+  }
+
+  .rmx-add-note {
+    position: absolute;
+    inset-inline-end: 0.25rem;
+    z-index: 10;
+    min-height: 1.8rem;
+    padding: 0.25rem 0.55rem;
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 40%, var(--sl-color-hairline-shade));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-bg-nav) 94%, transparent);
+    color: var(--sl-color-text-accent);
+    box-shadow: var(--sl-shadow-sm);
+    font: inherit;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 120ms ease, transform 120ms ease, background-color 120ms ease;
+  }
+
+  .rmx-add-note:hover {
+    transform: translateY(-1px);
+    background: color-mix(in srgb, var(--sl-color-accent) 16%, var(--sl-color-bg-nav));
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note {
+    align-self: start;
+    justify-self: end;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0.3rem 0 0.8rem auto;
+    border: 1px solid color-mix(in srgb, var(--sl-color-accent) 35%, var(--sl-color-hairline-shade));
+    border-inline-start: 0.3rem solid var(--sl-color-accent);
+    border-radius: 0.75rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 8%, var(--sl-color-bg-nav));
+    box-shadow: var(--sl-shadow-sm);
+    color: var(--sl-color-text);
+    font-size: 0.84rem;
+    overflow: hidden;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note[open] {
+    width: min(100%, 24rem);
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note--embedded {
+    align-self: flex-end;
+    margin-block: 0.45rem 0;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note summary {
+    position: relative;
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.5rem 2rem 0.5rem 0.65rem;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note summary::after {
+    content: '+';
+    position: absolute;
+    inset-inline-end: 0.8rem;
+    top: 50%;
+    translate: 0 -50%;
+    color: var(--sl-color-text-accent);
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note[open] summary::after {
+    content: '−';
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note:not([open]) > :not(summary) {
+    display: none;
+  }
+
+  .rmx-inline-revision-note__title {
+    color: var(--sl-color-text-accent);
+    font-size: 0.66rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .rmx-inline-revision-note__target {
+    overflow: hidden;
+    color: var(--sl-color-gray-2);
+    max-width: 13rem;
+    font-size: 0.7rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note:not([open]) summary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 1.9rem;
+    padding-block: 0.3rem;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note:not([open]) summary::after {
+    inset-inline-end: 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note__content {
+    width: auto;
+    margin: 0;
+    padding: 0.1rem 0.85rem 0.55rem;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--sl-color-text);
+  }
+
+  .sl-markdown-content .rmx-inline-revision-note__content p {
+    margin: 0.35rem 0;
+  }
+
+  .rmx-inline-revision-note__actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.5rem 0.75rem 0.7rem;
+    border-top: 1px solid var(--sl-color-hairline-shade);
+  }
+
+  .rmx-inline-revision-note__delete {
+    padding: 0.35rem 0.6rem;
+    border: 1px solid color-mix(in srgb, var(--sl-color-red) 45%, var(--sl-color-hairline-shade));
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--sl-color-red-high);
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .rmx-inline-revision-note__delete:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--sl-color-red) 10%, transparent);
+  }
+
+  .rmx-inline-revision-note__delete:disabled {
+    cursor: wait;
+    opacity: 0.55;
+  }
+
+  .rmx-note-dialog {
+    width: min(92vw, 38rem);
+    padding: 0;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 1rem;
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-text);
+    box-shadow: 0 2rem 6rem rgba(0, 0, 0, 0.35);
+  }
+
+  .rmx-note-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(3px);
+  }
+
+  .rmx-note-dialog form {
+    display: grid;
+    gap: 1rem;
+    padding: 1.15rem;
+  }
+
+  .rmx-note-dialog__header,
+  .rmx-note-dialog__actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .rmx-note-dialog__header > div {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .rmx-note-dialog__eyebrow {
+    color: var(--sl-color-text-accent);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .rmx-note-dialog__close {
+    border: 0;
+    background: transparent;
+    color: var(--sl-color-gray-3);
+    font-size: 1.5rem;
+    cursor: pointer;
+  }
+
+  .rmx-note-dialog__context {
+    max-height: 6rem;
+    margin: 0;
+    padding: 0.7rem 0.8rem;
+    overflow: auto;
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, var(--sl-color-accent) 9%, var(--sl-color-bg));
+    color: var(--sl-color-gray-2);
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  .rmx-note-dialog textarea {
+    width: 100%;
+    resize: vertical;
+    padding: 0.8rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.7rem;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    font: inherit;
+    line-height: 1.5;
+  }
+
+  .rmx-note-dialog textarea:focus {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .rmx-note-dialog__status {
+    min-height: 1.2rem;
+    margin: 0;
+    color: var(--sl-color-gray-3);
+    font-size: 0.78rem;
+  }
+
+  .rmx-note-dialog__status[data-error='true'] {
+    color: var(--sl-color-red-high);
+  }
+
+  .rmx-note-dialog__actions {
+    justify-content: flex-end;
+  }
+
+  .rmx-note-dialog__actions button {
+    min-height: 2.25rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.65rem;
+    background: var(--sl-color-bg);
+    color: var(--sl-color-text);
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .rmx-note-dialog__actions .rmx-note-dialog__save {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent-high);
+    color: var(--sl-color-black);
+  }
+
+  .rmx-note-dialog__actions button:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
+
   .sl-markdown-content mermaid-diagram {
     display: block;
     margin: 1.25rem 0;

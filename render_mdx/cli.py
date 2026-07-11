@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import html
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -23,7 +24,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 APP_TEMPLATE = PACKAGE_ROOT / "app_template"
-STATE_DIR = Path(os.environ.get("RENDER_MDX_HOME", str(Path.home() / ".render-mdx"))).expanduser()
+STATE_DIR = Path(
+    os.environ.get("RENDER_MDX_HOME", str(Path.home() / ".render-mdx"))
+).expanduser()
 CONFIG_PATH = STATE_DIR / "config.json"
 APP_DIR = STATE_DIR / "app"
 CONTENT_DIR = APP_DIR / "src" / "content" / "docs" / "rendered"
@@ -116,6 +119,41 @@ class ConfigStore:
             ]
             self.save(data)
 
+    def add_note(self, raw_path: str, context: str, note: str) -> tuple[Path, str]:
+        """Append a note only when the source is registered and still writable."""
+        path = Path(raw_path).expanduser().resolve()
+        with self.lock:
+            data = self.load()
+            self.validate_note_source(data, path)
+            note_id = append_revision_note(path, context, note)
+        return path, note_id
+
+    def delete_note(self, raw_path: str, note_id: str) -> Path:
+        """Delete one identified revision note from a registered source."""
+        path = Path(raw_path).expanduser().resolve()
+        with self.lock:
+            data = self.load()
+            self.validate_note_source(data, path)
+            delete_revision_note(path, note_id)
+        return path
+
+    @staticmethod
+    def validate_note_source(data: dict[str, Any], path: Path) -> None:
+        """Validate that a note mutation targets an active MDX source."""
+        registered_paths = {
+            Path(entry["path"]).expanduser().resolve()
+            for entry in data.get("sources", [])
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+        }
+        if path not in registered_paths:
+            raise ValueError("The document is not registered with render-mdx.")
+        if (
+            not path.exists()
+            or not path.is_file()
+            or path.suffix.lower() not in ALLOWED_SUFFIXES
+        ):
+            raise ValueError("The source document is no longer available.")
+
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
 
@@ -140,7 +178,11 @@ def copy_app_template(force: bool = False) -> None:
         elif target.exists() or target.is_symlink():
             target.unlink()
         if entry.is_dir():
-            shutil.copytree(entry, target, ignore=shutil.ignore_patterns("node_modules", "dist", ".astro"))
+            shutil.copytree(
+                entry,
+                target,
+                ignore=shutil.ignore_patterns("node_modules", "dist", ".astro"),
+            )
         else:
             shutil.copy2(entry, target)
     # Remove legacy content layout that is no longer used by this version.
@@ -157,7 +199,9 @@ def ensure_node_dependencies(skip_install: bool = False) -> None:
             f"Node dependencies are missing in {APP_DIR}. Run without --skip-install once."
         )
     if shutil.which("npm") is None:
-        raise RuntimeError("npm was not found. Install Node.js/npm before running render-mdx.")
+        raise RuntimeError(
+            "npm was not found. Install Node.js/npm before running render-mdx."
+        )
     print("Installing Astro dependencies in ~/.render-mdx/app ...", flush=True)
     subprocess.run(["npm", "install"], cwd=APP_DIR, check=True)
 
@@ -183,6 +227,10 @@ def rendered_name(path: Path) -> str:
 
 TITLE_RE = re.compile(r"^[ \t]*title[ \t]*:[ \t]*\S.*$", re.MULTILINE)
 EMPTY_TITLE_RE = re.compile(r"^[ \t]*title[ \t]*:[ \t]*$", re.MULTILINE)
+REVISION_NOTES_HEADING_RE = re.compile(r"^## Revision notes\s*$", re.MULTILINE)
+MAX_NOTE_LENGTH = 10_000
+MAX_NOTE_CONTEXT_LENGTH = 500
+NOTE_ID_RE = re.compile(r"^[0-9a-f-]{36}$")
 
 
 def ensure_frontmatter_title(text: str, path: Path) -> str:
@@ -200,7 +248,83 @@ def ensure_frontmatter_title(text: str, path: Path) -> str:
         block = EMPTY_TITLE_RE.sub(f"title: {json.dumps(title)}", block, count=1)
     else:
         block = f"title: {json.dumps(title)}\n{block}"
-    return text[: match.start(1)] + block + text[match.end(1):]
+    return text[: match.start(1)] + block + text[match.end(1) :]
+
+
+def escape_mdx_text(value: str) -> str:
+    """Escape user-entered text so it remains plain text inside MDX."""
+    return html.escape(value, quote=False).replace("{", "&#123;").replace("}", "&#125;")
+
+
+def replace_source_text(path: Path, text: str) -> None:
+    """Atomically replace source text while retaining its file permissions."""
+    temporary = path.with_name(f".{path.name}.render-mdx.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        temporary.chmod(path.stat().st_mode)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def append_revision_note(path: Path, context: str, note: str) -> str:
+    """Atomically append a contextual revision note to an MDX source file."""
+    clean_context = context.strip()
+    clean_note = note.strip()
+    if not clean_note:
+        raise ValueError("Write a note before saving.")
+    if len(clean_note) > MAX_NOTE_LENGTH:
+        raise ValueError(f"Note is too long (maximum {MAX_NOTE_LENGTH:,} characters).")
+    if len(clean_context) > MAX_NOTE_CONTEXT_LENGTH:
+        clean_context = clean_context[:MAX_NOTE_CONTEXT_LENGTH].rstrip() + "…"
+
+    text = path.read_text(encoding="utf-8")
+    escaped_context = escape_mdx_text(clean_context or "Document")
+    escaped_note = escape_mdx_text(clean_note)
+    note_id = str(uuid.uuid4())
+    quoted_note = "\n".join(
+        f"> {line}" if line else ">" for line in escaped_note.splitlines()
+    )
+    heading = "" if REVISION_NOTES_HEADING_RE.search(text) else "\n\n## Revision notes"
+    addition = (
+        f"{heading}\n\n"
+        f"> **Revision note**\n"
+        f">\n"
+        f'> <span data-rmx-note-id="{note_id}"></span>\n'
+        f">\n"
+        f"> **Target:** {escaped_context}\n"
+        f">\n"
+        f"{quoted_note}\n"
+    )
+
+    updated = text.rstrip() + addition
+    replace_source_text(path, updated)
+    return note_id
+
+
+def delete_revision_note(path: Path, note_id: str) -> None:
+    """Atomically remove the revision-note block carrying the given ID."""
+    clean_note_id = note_id.strip().lower()
+    if not NOTE_ID_RE.fullmatch(clean_note_id):
+        raise ValueError("Invalid revision note ID.")
+
+    text = path.read_text(encoding="utf-8")
+    marker = f'data-rmx-note-id="{clean_note_id}"'
+    marker_position = text.find(marker)
+    if marker_position < 0:
+        raise ValueError("Revision note was not found.")
+    block_start = text.rfind("> **Revision note**", 0, marker_position)
+    if block_start < 0:
+        raise ValueError("Revision note block is malformed.")
+    block_start = text.rfind("\n", 0, block_start) + 1
+    next_block = text.find("\n\n> **Revision note**", marker_position)
+    if next_block >= 0:
+        updated = text[:block_start].rstrip() + text[next_block:]
+    else:
+        updated = text[:block_start].rstrip() + "\n"
+    if "> **Revision note**" not in updated:
+        updated = re.sub(r"\n*## Revision notes\s*\n*$", "\n", updated)
+    replace_source_text(path, updated)
 
 
 def mirror_file(path: Path) -> Path:
@@ -257,7 +381,10 @@ def sync_once(store: ConfigStore) -> dict[str, Any]:
     for stale in CONTENT_DIR.glob("*.mdx"):
         if stale not in expected:
             stale.unlink(missing_ok=True)
-    return {"documents": sorted(documents, key=lambda item: item["title"].lower()), "errors": errors}
+    return {
+        "documents": sorted(documents, key=lambda item: item["title"].lower()),
+        "errors": errors,
+    }
 
 
 class SyncWorker:
@@ -295,7 +422,9 @@ class SyncWorker:
                 self.last_signature = signature
 
 
-def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200) -> None:
+def json_response(
+    handler: BaseHTTPRequestHandler, payload: Any, status: int = 200
+) -> None:
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -365,38 +494,77 @@ def make_handler(store: ConfigStore, start_dir: Path):
                     sync_once(store)
                     json_response(self, {"ok": True})
                     return
-            except ValueError as exc:
+                if parsed.path == "/api/notes":
+                    path, note_id = store.add_note(
+                        str(payload.get("path", "")),
+                        str(payload.get("context", "")),
+                        str(payload.get("note", "")),
+                    )
+                    sync_once(store)
+                    json_response(
+                        self, {"ok": True, "path": str(path), "noteId": note_id}
+                    )
+                    return
+                if parsed.path == "/api/notes/delete":
+                    path = store.delete_note(
+                        str(payload.get("path", "")),
+                        str(payload.get("noteId", "")),
+                    )
+                    sync_once(store)
+                    json_response(self, {"ok": True, "path": str(path)})
+                    return
+            except (OSError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             json_response(self, {"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
         def handle_browse(self, path: Path) -> None:
             if not path.exists():
-                json_response(self, {"error": f"Path does not exist: {path}"}, HTTPStatus.BAD_REQUEST)
+                json_response(
+                    self,
+                    {"error": f"Path does not exist: {path}"},
+                    HTTPStatus.BAD_REQUEST,
+                )
                 return
             if path.is_file():
                 path = path.parent
             entries = []
             try:
-                children = sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+                children = sorted(
+                    path.iterdir(),
+                    key=lambda item: (not item.is_dir(), item.name.lower()),
+                )
             except OSError as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if path.parent != path:
-                entries.append({"name": "..", "path": str(path.parent), "kind": "directory", "up": True})
+                entries.append(
+                    {
+                        "name": "..",
+                        "path": str(path.parent),
+                        "kind": "directory",
+                        "up": True,
+                    }
+                )
             for child in children:
                 if child.name.startswith("."):
                     continue
                 if child.is_dir():
-                    entries.append({"name": child.name, "path": str(child), "kind": "directory"})
+                    entries.append(
+                        {"name": child.name, "path": str(child), "kind": "directory"}
+                    )
                 elif child.suffix.lower() in ALLOWED_SUFFIXES:
-                    entries.append({"name": child.name, "path": str(child), "kind": "file"})
+                    entries.append(
+                        {"name": child.name, "path": str(child), "kind": "file"}
+                    )
             json_response(self, {"path": str(path), "entries": entries})
 
     return Handler
 
 
-def start_api_server(store: ConfigStore, start_dir: Path, host: str, port: int) -> ThreadingHTTPServer:
+def start_api_server(
+    store: ConfigStore, start_dir: Path, host: str, port: int
+) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), make_handler(store, start_dir))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -426,16 +594,45 @@ def stop_astro() -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Start the local render-mdx web interface.")
-    parser.add_argument("paths", nargs="*", help="Optional .md/.mdx files or directories to add before starting.")
-    parser.add_argument("--host", default=DEFAULT_ASTRO_HOST, help="Astro dev server host.")
-    parser.add_argument("--port", type=int, default=DEFAULT_ASTRO_PORT, help="Astro dev server port.")
-    parser.add_argument("--api-host", default=DEFAULT_API_HOST, help="Local picker API host.")
-    parser.add_argument("--api-port", type=int, default=DEFAULT_API_PORT, help="Local picker API port.")
-    parser.add_argument("--no-open", action="store_true", help="Do not open the browser automatically.")
-    parser.add_argument("--reset-app", action="store_true", help="Recreate the cached Astro app in ~/.render-mdx/app.")
-    parser.add_argument("--skip-install", action="store_true", help="Fail instead of running npm install if needed.")
-    parser.add_argument("--watch-interval", type=float, default=0.7, help="Seconds between source file change checks.")
+    parser = argparse.ArgumentParser(
+        description="Start the local render-mdx web interface."
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="Optional .md/.mdx files or directories to add before starting.",
+    )
+    parser.add_argument(
+        "--host", default=DEFAULT_ASTRO_HOST, help="Astro dev server host."
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_ASTRO_PORT, help="Astro dev server port."
+    )
+    parser.add_argument(
+        "--api-host", default=DEFAULT_API_HOST, help="Local picker API host."
+    )
+    parser.add_argument(
+        "--api-port", type=int, default=DEFAULT_API_PORT, help="Local picker API port."
+    )
+    parser.add_argument(
+        "--no-open", action="store_true", help="Do not open the browser automatically."
+    )
+    parser.add_argument(
+        "--reset-app",
+        action="store_true",
+        help="Recreate the cached Astro app in ~/.render-mdx/app.",
+    )
+    parser.add_argument(
+        "--skip-install",
+        action="store_true",
+        help="Fail instead of running npm install if needed.",
+    )
+    parser.add_argument(
+        "--watch-interval",
+        type=float,
+        default=0.7,
+        help="Seconds between source file change checks.",
+    )
     return parser.parse_args(argv)
 
 
@@ -454,7 +651,9 @@ def main(argv: list[str] | None = None) -> int:
     api_url = f"http://{args.api_host}:{args.api_port}"
     worker = SyncWorker(store, args.watch_interval)
     worker.start()
-    api_server = start_api_server(store, Path.home().resolve(), args.api_host, args.api_port)
+    api_server = start_api_server(
+        store, Path.home().resolve(), args.api_host, args.api_port
+    )
     astro = start_astro(args.host, args.port, api_url)
     url = f"http://{args.host}:{args.port}/"
     print(f"render-mdx is running: {url}")

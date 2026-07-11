@@ -17,7 +17,7 @@ export default defineConfig({
         PageSidebar: './src/components/CustomPageSidebar.astro',
       },
       sidebar: [
-        { label: 'Documents', items: [{ autogenerate: { directory: 'docs/rendered', collapsed: false } }] },
+        { label: 'Documents', items: [{ autogenerate: { directory: 'rendered', collapsed: false } }] },
       ],
       customCss: ['./src/styles/custom.css'],
     }),
