@@ -5,27 +5,23 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
 ---
 
 <section class="picker not-content" data-api-url={apiUrl}>
-  <section class="picker__hero">
-    <header class="picker__header">
-      <div class="picker__brand">
+  <div class="picker__split">
+    <aside class="picker__rail">
+      <div class="picker__rail-brand">
         <span class="picker__logo" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 4h10l6 6v10a0 0 0 0 1 0 0H4z" />
+            <path d="M4 4h10l6 6v10H4z" />
             <path d="M14 4v6h6" />
             <path d="M8 15h8M8 18h5" />
           </svg>
         </span>
-        <div class="picker__brand-text">
+        <div>
           <span class="picker__eyebrow">Local MDX workspace</span>
-          <p class="picker__headline">Turn scattered notes into rendered docs.</p>
-          <p>Browse local folders, save the files you care about, and open the rendered output in one click.</p>
+          <h1 class="picker__rail-title">Render queue</h1>
         </div>
       </div>
-      <div class="picker__header-actions">
-        <div class="picker__theme">
-          <span class="picker__theme-label">Theme</span>
-          <ThemeSelect />
-        </div>
+      <p class="picker__rail-copy">Keep source selection, refresh, and theme controls pinned while the document list does the work.</p>
+      <div class="picker__rail-actions">
         <button class="picker__browse" type="button">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14" />
@@ -39,43 +35,34 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
           </svg>
         </button>
       </div>
-    </header>
+      <div class="picker__theme">
+        <span class="picker__theme-label">Theme</span>
+        <ThemeSelect />
+      </div>
+      <div class="picker__rail-steps" aria-label="Workflow">
+        <span><strong>1</strong> Browse</span>
+        <span><strong>2</strong> Save</span>
+        <span><strong>3</strong> Open</span>
+      </div>
+    </aside>
 
-    <div class="picker__hero-meta">
-      <div class="picker__stat">
-        <span class="picker__stat-label">Workflow</span>
-        <strong>Browse</strong>
-        <span>Pick a local <code>.mdx</code> file from disk.</span>
+    <section class="picker__workspace">
+      <div class="picker__workspace-head">
+        <div class="picker__list-title">
+          <h2>Saved files</h2>
+          <p>Your current render set.</p>
+        </div>
+        <span class="picker__count"></span>
       </div>
-      <div class="picker__stat">
-        <span class="picker__stat-label">Library</span>
-        <strong>Save</strong>
-        <span>Keep a reusable list of documents in this workspace.</span>
-      </div>
-      <div class="picker__stat">
-        <span class="picker__stat-label">Output</span>
-        <strong>Open</strong>
-        <span>Launch the rendered page as soon as it is available.</span>
-      </div>
-    </div>
-  </section>
-
-  <section class="picker__list-section">
-    <div class="picker__list-head">
-      <div class="picker__list-title">
-        <h2>Saved files</h2>
-        <p>Your current render set.</p>
-      </div>
-      <span class="picker__count"></span>
       <div class="picker__search">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
         </svg>
-        <input class="picker__search-input" type="text" placeholder="Filter by path…" autocomplete="off" />
+        <input class="picker__search-input" type="text" placeholder="Filter by path..." autocomplete="off" />
       </div>
-    </div>
-    <div class="picker__files" role="list"></div>
-  </section>
+      <div class="picker__files" role="list"></div>
+    </section>
+  </div>
 
   <p class="picker__status" role="status"></p>
 
