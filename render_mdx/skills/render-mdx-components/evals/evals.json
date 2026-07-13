@@ -1,0 +1,30 @@
+{
+  "skill_name": "render-mdx-components",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Create an MDX project brief that uses callouts, steps, and grouped option cards, then make sure it will render well in render-mdx.",
+      "expected_output": "The agent authors MDX for the requested brief, imports Aside, Steps, Card, and CardGrid from @mdx-components, avoids inline styling, and does not modify the render-mdx codebase.",
+      "files": [
+        "docs/project-brief.mdx"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Register docs/plan.mdx with render-mdx without launching the Astro web server.",
+      "expected_output": "The agent uses render-mdx register docs/plan.mdx, explains that it writes the source registry, and uses RENDER_MDX_HOME for tests or temporary state.",
+      "files": [
+        "render_mdx/cli.py",
+        "README.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Write an MDX runbook with OS-specific command tabs and a Mermaid flowchart. The topic is deployment, not render-mdx.",
+      "expected_output": "The agent imports Tabs and TabItem from @mdx-components, uses a fenced Mermaid block without importing a diagram component, avoids inline styling, and focuses on the deployment document content.",
+      "files": [
+        "docs/deployment-runbook.mdx"
+      ]
+    }
+  ]
+}

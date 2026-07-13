@@ -24,6 +24,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 APP_TEMPLATE = PACKAGE_ROOT / "app_template"
+BUNDLED_SKILLS = PACKAGE_ROOT / "skills"
+DEFAULT_SKILL_NAME = "render-mdx-components"
 STATE_DIR = Path(
     os.environ.get("RENDER_MDX_HOME", str(Path.home() / ".render-mdx"))
 ).expanduser()
@@ -565,7 +567,12 @@ def make_handler(store: ConfigStore, start_dir: Path):
 def start_api_server(
     store: ConfigStore, start_dir: Path, host: str, port: int
 ) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), make_handler(store, start_dir))
+    try:
+        server = ThreadingHTTPServer((host, port), make_handler(store, start_dir))
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not start the local picker API on http://{host}:{port}: {exc}"
+        ) from exc
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
@@ -574,11 +581,16 @@ def start_api_server(
 def start_astro(host: str, port: int, api_url: str) -> subprocess.Popen[bytes]:
     env = os.environ.copy()
     env["RENDER_MDX_API_URL"] = api_url
-    return subprocess.Popen(
-        ["npm", "run", "dev", "--", "--host", host, "--port", str(port)],
-        cwd=APP_DIR,
-        env=env,
-    )
+    try:
+        return subprocess.Popen(
+            ["npm", "run", "dev", "--", "--host", host, "--port", str(port)],
+            cwd=APP_DIR,
+            env=env,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not start the Astro app on http://{host}:{port}: {exc}"
+        ) from exc
 
 
 def stop_astro() -> None:
@@ -594,6 +606,11 @@ def stop_astro() -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    if argv and argv[0] in {"add", "register"}:
+        return parse_register_args(argv[1:])
+    if argv and argv[0] == "install-skill":
+        return parse_install_skill_args(argv[1:])
+
     parser = argparse.ArgumentParser(
         description="Start the local render-mdx web interface."
     )
@@ -636,13 +653,97 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def parse_register_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="render-mdx register",
+        description="Register .md/.mdx files without starting the web interface.",
+    )
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="One or more .md/.mdx files to save in the render-mdx source registry.",
+    )
+    args = parser.parse_args(argv)
+    args.command = "register"
+    return args
+
+
+def parse_install_skill_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="render-mdx install-skill",
+        description="Install the render-mdx agent skill into a project.",
+    )
+    parser.add_argument(
+        "project",
+        nargs="?",
+        default=".",
+        help="Project folder that should receive .agents/skills/render-mdx-components.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing installed render-mdx-components skill.",
+    )
+    args = parser.parse_args(argv)
+    args.command = "install-skill"
+    return args
+
+
+def register_paths(store: ConfigStore, raw_paths: list[str]) -> list[Source]:
+    return [store.add(raw_path) for raw_path in raw_paths]
+
+
+def install_skill(project: str, force: bool = False) -> Path:
+    source = BUNDLED_SKILLS / DEFAULT_SKILL_NAME
+    if not source.exists():
+        raise RuntimeError(f"Bundled skill was not found: {source}")
+    project_path = Path(project).expanduser().resolve()
+    if not project_path.exists():
+        raise ValueError(f"Project folder does not exist: {project_path}")
+    if not project_path.is_dir():
+        raise ValueError(f"Project path is not a directory: {project_path}")
+
+    destination = project_path / ".agents" / "skills" / DEFAULT_SKILL_NAME
+    if destination.exists():
+        if not force:
+            raise FileExistsError(
+                f"Skill already exists: {destination}. Re-run with --force to replace it."
+            )
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+    return destination
+
+
+def print_registered_sources(sources: list[Source]) -> None:
+    for source in sources:
+        print(f"Registered: {source.path}")
+    print(f"Saved MDX sources: {CONFIG_PATH}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     store = ConfigStore(CONFIG_PATH)
+    if getattr(args, "command", None) == "register":
+        try:
+            sources = register_paths(store, args.paths)
+        except ValueError as exc:
+            print(f"render-mdx: {exc}", file=sys.stderr)
+            return 1
+        print_registered_sources(sources)
+        return 0
+    if getattr(args, "command", None) == "install-skill":
+        try:
+            destination = install_skill(args.project, force=args.force)
+        except (FileExistsError, OSError, RuntimeError, ValueError) as exc:
+            print(f"render-mdx: {exc}", file=sys.stderr)
+            return 1
+        print(f"Installed skill: {destination}")
+        return 0
+
     try:
         copy_app_template(force=args.reset_app)
-        for raw_path in args.paths:
-            store.add(raw_path)
+        register_paths(store, args.paths)
         ensure_node_dependencies(skip_install=args.skip_install)
     except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
         print(f"render-mdx: {exc}", file=sys.stderr)
@@ -651,10 +752,20 @@ def main(argv: list[str] | None = None) -> int:
     api_url = f"http://{args.api_host}:{args.api_port}"
     worker = SyncWorker(store, args.watch_interval)
     worker.start()
-    api_server = start_api_server(
-        store, Path.home().resolve(), args.api_host, args.api_port
-    )
-    astro = start_astro(args.host, args.port, api_url)
+    api_server: ThreadingHTTPServer | None = None
+    astro: subprocess.Popen[bytes] | None = None
+    try:
+        api_server = start_api_server(
+            store, Path.home().resolve(), args.api_host, args.api_port
+        )
+        astro = start_astro(args.host, args.port, api_url)
+    except RuntimeError as exc:
+        worker.stop()
+        if api_server is not None:
+            api_server.shutdown()
+            api_server.server_close()
+        print(f"render-mdx: {exc}", file=sys.stderr)
+        return 1
     url = f"http://{args.host}:{args.port}/"
     print(f"render-mdx is running: {url}")
     print(f"Saved MDX sources: {CONFIG_PATH}")

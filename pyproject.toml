@@ -24,4 +24,5 @@ render_mdx = [
   "app_template/astro.config.mjs",
   "app_template/tsconfig.json",
   "app_template/src/**/*",
+  "skills/**/*",
 ]
