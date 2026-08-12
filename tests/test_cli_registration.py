@@ -187,6 +187,16 @@ class CliRegistrationTests(unittest.TestCase):
             (APP_TEMPLATE / "src" / "components" / "mdx" / "index.ts").is_file()
         )
 
+    def test_app_template_bundles_registered_document_tree(self) -> None:
+        components = APP_TEMPLATE / "src" / "components"
+        page_frame = (components / "CustomPageFrame.astro").read_text(encoding="utf-8")
+        document_tree = (components / "DocumentTree.astro").read_text(encoding="utf-8")
+
+        self.assertIn("<DocumentTree />", page_frame)
+        self.assertIn("/api/state", document_tree)
+        self.assertIn("relativeParts", document_tree)
+        self.assertIn("document-tree__folder", document_tree)
+
     def test_authoring_skill_lists_supported_aside_types(self) -> None:
         skill = (BUNDLED_SKILLS / "render-mdx-components" / "SKILL.md").read_text(
             encoding="utf-8"

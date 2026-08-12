@@ -1,0 +1,245 @@
+---
+const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
+---
+
+<section class="document-tree not-content" data-document-tree data-api-url={apiUrl} aria-labelledby="document-tree-title">
+  <div class="document-tree__header">
+    <div>
+      <span class="document-tree__eyebrow">Workspace</span>
+      <h2 id="document-tree-title">Documents</h2>
+    </div>
+    <a class="document-tree__home" href="/">Manage</a>
+  </div>
+  <div class="document-tree__content" aria-live="polite">
+    <p class="document-tree__status">Loading registered documents…</p>
+  </div>
+</section>
+
+<script>
+  const root = document.querySelector('[data-document-tree]');
+  const content = root?.querySelector('.document-tree__content');
+
+  function pathParts(path) {
+    const value = String(path);
+    const isWindowsPath = /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\');
+    return value.split(isWindowsPath ? /[\\/]+/ : /\/+/).filter(Boolean);
+  }
+
+  function baseName(path) {
+    const parts = pathParts(path);
+    return parts.at(-1) || path;
+  }
+
+  function relativeParts(sourcePath, documentPath) {
+    const isWindowsPath =
+      /^[a-z]:[\\/]/i.test(String(sourcePath)) || String(sourcePath).startsWith('\\\\');
+    const sourceValue = isWindowsPath
+      ? String(sourcePath).replaceAll('\\', '/')
+      : String(sourcePath);
+    const document = isWindowsPath
+      ? String(documentPath).replaceAll('\\', '/')
+      : String(documentPath);
+    const source = sourceValue.replace(/\/+$/, '');
+    const prefix = `${source}/`;
+    const relative = document.startsWith(prefix) ? document.slice(prefix.length) : baseName(document);
+    return relative.split('/').filter(Boolean);
+  }
+
+  function sourceLabel(source, allSources) {
+    const parts = pathParts(source.path);
+    for (let depth = 1; depth <= parts.length; depth += 1) {
+      const label = parts.slice(-depth).join('/');
+      const matches = allSources.filter(
+        (candidate) => pathParts(candidate.path).slice(-depth).join('/') === label
+      );
+      if (matches.length === 1) return label;
+    }
+    return source.path;
+  }
+
+  function createTree(source, documents) {
+    const tree = { folders: new Map(), documents: [] };
+    for (const document of documents) {
+      const parts = relativeParts(source.path, document.path);
+      parts.pop();
+      let node = tree;
+      for (const part of parts) {
+        if (!node.folders.has(part)) {
+          node.folders.set(part, { folders: new Map(), documents: [] });
+        }
+        node = node.folders.get(part);
+      }
+      node.documents.push(document);
+    }
+    return tree;
+  }
+
+  function appendIcon(parent, kind) {
+    const icon = document.createElement('span');
+    icon.className = 'document-tree__icon';
+    icon.dataset.kind = kind;
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      kind === 'folder'
+        ? '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
+        : '<svg viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5z"/><path d="M14 3v6h5"/></svg>';
+    parent.append(icon);
+  }
+
+  function normalizeUrl(value) {
+    try {
+      return decodeURIComponent(new URL(value, window.location.origin).pathname).replace(/\/+$/, '');
+    } catch {
+      return String(value).replace(/\/+$/, '');
+    }
+  }
+
+  function createDocumentLink(documentData, labelText = '') {
+    const link = document.createElement('a');
+    link.className = 'document-tree__document';
+    link.href = documentData.url;
+    link.title = documentData.path;
+    appendIcon(link, 'file');
+
+    const label = document.createElement('span');
+    label.textContent = labelText || documentData.title || baseName(documentData.path);
+    link.append(label);
+
+    if (normalizeUrl(documentData.url) === normalizeUrl(window.location.pathname)) {
+      link.classList.add('is-current');
+      link.setAttribute('aria-current', 'page');
+    }
+    return link;
+  }
+
+  function renderTree(parent, tree) {
+    const folders = [...tree.folders.entries()].sort(([left], [right]) =>
+      left.localeCompare(right, undefined, { sensitivity: 'base' })
+    );
+    for (const [name, childTree] of folders) {
+      const group = document.createElement('details');
+      group.className = 'document-tree__folder';
+      group.open = true;
+
+      const summary = document.createElement('summary');
+      appendIcon(summary, 'folder');
+      const label = document.createElement('span');
+      label.textContent = name;
+      summary.append(label);
+      group.append(summary);
+
+      const children = document.createElement('div');
+      children.className = 'document-tree__children';
+      renderTree(children, childTree);
+      group.append(children);
+      parent.append(group);
+    }
+
+    const documents = [...tree.documents].sort((left, right) =>
+      (left.title || left.path).localeCompare(right.title || right.path, undefined, {
+        sensitivity: 'base',
+      })
+    );
+    for (const documentData of documents) {
+      parent.append(createDocumentLink(documentData));
+    }
+  }
+
+  function renderState(state) {
+    if (!content) return;
+    content.innerHTML = '';
+
+    const sources = [...(state.sources || [])].sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === 'directory' ? -1 : 1;
+      return baseName(left.path).localeCompare(baseName(right.path), undefined, {
+        sensitivity: 'base',
+      });
+    });
+    const documents = state.documents || [];
+
+    if (!sources.length) {
+      const empty = document.createElement('p');
+      empty.className = 'document-tree__status';
+      empty.textContent = 'No registered files or folders.';
+      content.append(empty);
+      return;
+    }
+
+    for (const source of sources) {
+      const sourceDocuments = documents.filter((documentData) =>
+        (documentData.sources || [documentData.source]).includes(source.path)
+      );
+
+      if (source.kind !== 'directory') {
+        const documentData = sourceDocuments.find((item) => item.path === source.path);
+        if (documentData) {
+          const displayedLabel = documentData.title || baseName(documentData.path);
+          const hasDuplicateName =
+            sources.filter((candidate) => {
+              if (candidate.kind === 'directory') return false;
+              const candidateDocument = documents.find((item) => item.path === candidate.path);
+              const candidateLabel =
+                candidateDocument?.title || baseName(candidateDocument?.path || candidate.path);
+              return (
+                candidateLabel.localeCompare(displayedLabel, undefined, {
+                  sensitivity: 'base',
+                }) === 0
+              );
+            }).length > 1;
+          content.append(
+            createDocumentLink(documentData, hasDuplicateName ? sourceLabel(source, sources) : '')
+          );
+        }
+        continue;
+      }
+
+      const group = document.createElement('details');
+      group.className = 'document-tree__source';
+      group.open = true;
+
+      const summary = document.createElement('summary');
+      summary.title = source.path;
+      appendIcon(summary, 'folder');
+      const label = document.createElement('span');
+      label.className = 'document-tree__source-name';
+      label.textContent = sourceLabel(source, sources);
+      summary.append(label);
+      const count = document.createElement('span');
+      count.className = 'document-tree__count';
+      count.textContent = String(sourceDocuments.length);
+      summary.append(count);
+      group.append(summary);
+
+      const children = document.createElement('div');
+      children.className = 'document-tree__children';
+      if (sourceDocuments.length) {
+        renderTree(children, createTree(source, sourceDocuments));
+      } else {
+        const empty = document.createElement('span');
+        empty.className = 'document-tree__empty';
+        empty.textContent = 'No Markdown files';
+        children.append(empty);
+      }
+      group.append(children);
+      content.append(group);
+    }
+  }
+
+  async function loadDocuments() {
+    if (!root || !content) return;
+    try {
+      const response = await fetch(`${root.dataset.apiUrl}/api/state`);
+      const state = await response.json();
+      if (!response.ok) throw new Error(state.error || 'Unable to load documents');
+      renderState(state);
+    } catch (error) {
+      content.innerHTML = '';
+      const status = document.createElement('p');
+      status.className = 'document-tree__status document-tree__status--error';
+      status.textContent = error instanceof Error ? error.message : 'Unable to load documents';
+      content.append(status);
+    }
+  }
+
+  loadDocuments();
+</script>

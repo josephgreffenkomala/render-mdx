@@ -1,6 +1,7 @@
 ---
 import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
 import { Icon } from '@astrojs/starlight/components';
+import DocumentTree from './DocumentTree.astro';
 
 const { hasSidebar } = Astro.locals.starlightRoute;
 ---
@@ -14,7 +15,7 @@ const { hasSidebar } = Astro.locals.starlightRoute;
 					<MobileMenuToggle />
 					<div id="starlight__sidebar" class="sidebar-pane">
 						<div class="sidebar-content sl-flex">
-							<slot name="sidebar" />
+							<DocumentTree />
 						</div>
 					</div>
 				</nav>
