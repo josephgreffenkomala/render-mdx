@@ -16,6 +16,7 @@ export default defineConfig({
         PageFrame: './src/components/CustomPageFrame.astro',
         PageSidebar: './src/components/CustomPageSidebar.astro',
       },
+      routeMiddleware: './src/route-data.ts',
       sidebar: [
         { label: 'Documents', items: [{ autogenerate: { directory: 'rendered', collapsed: false } }] },
       ],

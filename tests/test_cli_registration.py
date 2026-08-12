@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,8 @@ from render_mdx.cli import (
     APP_TEMPLATE,
     BUNDLED_SKILLS,
     ConfigStore,
+    Source,
+    build_navigation_order,
     build_astro_env,
     discover_files,
     install_skill,
@@ -17,6 +20,7 @@ from render_mdx.cli import (
     register_paths,
     start_api_server,
     sync_once,
+    visible_sources,
 )
 
 
@@ -77,9 +81,7 @@ class CliRegistrationTests(unittest.TestCase):
         (source,) = register_paths(store, [str(self.root)])
 
         self.assertEqual(source.path, self.root.resolve())
-        self.assertEqual(
-            [item.path for item in store.sources()], [self.root.resolve()]
-        )
+        self.assertEqual([item.path for item in store.sources()], [self.root.resolve()])
 
     def test_register_paths_rejects_an_empty_path(self) -> None:
         store = ConfigStore(self.root / "config.json")
@@ -129,6 +131,13 @@ class CliRegistrationTests(unittest.TestCase):
             [document["path"] for document in updated["documents"]],
             [str(first), str(second)],
         )
+        navigation = json.loads(
+            (self.root / "rendered" / "_navigation.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [item["path"] for item in navigation["items"]],
+            [str(first), str(second)],
+        )
 
     def test_sync_once_tracks_documents_for_overlapping_sources(self) -> None:
         docs = self.root / "docs"
@@ -147,6 +156,68 @@ class CliRegistrationTests(unittest.TestCase):
         self.assertEqual(
             result["documents"][0]["sources"],
             [str(docs.resolve()), str(nested.resolve())],
+        )
+
+    def test_visible_sources_hides_a_file_covered_by_a_directory(self) -> None:
+        store = ConfigStore(self.root / "config.json")
+        store.add(str(self.source))
+        store.add(str(self.root))
+
+        result = visible_sources(store.sources())
+
+        self.assertEqual([source.path for source in result], [self.root.resolve()])
+
+    def test_visible_sources_keeps_an_uncovered_file(self) -> None:
+        docs = self.root / "docs"
+        other = self.root / "other"
+        docs.mkdir()
+        other.mkdir()
+        (docs / "covered.mdx").write_text("# Covered\n", encoding="utf-8")
+        standalone = other / "standalone.mdx"
+        standalone.write_text("# Standalone\n", encoding="utf-8")
+        store = ConfigStore(self.root / "config.json")
+        store.add(str(docs))
+        store.add(str(standalone))
+
+        result = visible_sources(store.sources())
+
+        self.assertEqual(
+            [source.path for source in result],
+            [docs.resolve(), standalone.resolve()],
+        )
+
+    def test_navigation_order_matches_sidebar_tree_and_skips_covered_file(
+        self,
+    ) -> None:
+        docs = self.root / "docs"
+        nested = docs / "nested"
+        nested.mkdir(parents=True)
+        top = docs / "z-top.mdx"
+        child_b = nested / "b-child.mdx"
+        child_a = nested / "a-child.mdx"
+        for path in (top, child_b, child_a):
+            path.write_text(f"# {path.stem}\n", encoding="utf-8")
+        sources = [Source(top), Source(docs)]
+        documents = [
+            {
+                "path": str(path),
+                "source": str(docs),
+                "sources": [str(docs), str(top)] if path == top else [str(docs)],
+                "title": path.stem,
+                "url": f"/rendered/{path.stem}/",
+            }
+            for path in (top, child_b, child_a)
+        ]
+
+        result = build_navigation_order(sources, documents)
+
+        self.assertEqual(
+            [(item["source"], item["path"]) for item in result],
+            [
+                (str(docs), str(child_a)),
+                (str(docs), str(child_b)),
+                (str(docs), str(top)),
+            ],
         )
 
     def test_install_skill_creates_project_agents_skill_directory(self) -> None:
@@ -191,11 +262,20 @@ class CliRegistrationTests(unittest.TestCase):
         components = APP_TEMPLATE / "src" / "components"
         page_frame = (components / "CustomPageFrame.astro").read_text(encoding="utf-8")
         document_tree = (components / "DocumentTree.astro").read_text(encoding="utf-8")
+        source_picker = (components / "SourcePicker.astro").read_text(encoding="utf-8")
+        route_data = (APP_TEMPLATE / "src" / "route-data.ts").read_text(
+            encoding="utf-8"
+        )
+        astro_config = (APP_TEMPLATE / "astro.config.mjs").read_text(encoding="utf-8")
 
         self.assertIn("<DocumentTree />", page_frame)
         self.assertIn("/api/state", document_tree)
+        self.assertIn("state.displaySources", document_tree)
+        self.assertIn("state.displaySources", source_picker)
         self.assertIn("relativeParts", document_tree)
         self.assertIn("document-tree__folder", document_tree)
+        self.assertIn("_navigation.json", route_data)
+        self.assertIn("routeMiddleware: './src/route-data.ts'", astro_config)
 
     def test_authoring_skill_lists_supported_aside_types(self) -> None:
         skill = (BUNDLED_SKILLS / "render-mdx-components" / "SKILL.md").read_text(

@@ -245,6 +245,98 @@ def discover_files(source: Source) -> list[Path]:
     return documents
 
 
+def visible_sources(sources: list[Source]) -> list[Source]:
+    """Hide standalone file registrations already covered by a folder source."""
+    directories = [source.path for source in sources if source.path.is_dir()]
+    return [
+        source
+        for source in sources
+        if source.path.is_dir()
+        or not any(source.path.is_relative_to(directory) for directory in directories)
+    ]
+
+
+def build_navigation_order(
+    sources: list[Source], documents: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """Flatten the visible source tree in the same order used by the sidebar."""
+
+    def navigation_item(source: Source, document: dict[str, Any]) -> dict[str, str]:
+        return {
+            "source": str(source.path),
+            "path": str(document["path"]),
+            "title": str(document["title"]),
+            "url": str(document["url"]),
+        }
+
+    def flatten_tree(source: Source, tree: dict[str, Any]) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        folders: dict[str, dict[str, Any]] = tree["folders"]
+        for name in sorted(folders, key=str.lower):
+            items.extend(flatten_tree(source, folders[name]))
+        items.extend(
+            navigation_item(source, document)
+            for document in sorted(
+                tree["documents"],
+                key=lambda item: str(item.get("title") or item["path"]).lower(),
+            )
+        )
+        return items
+
+    ordered: list[dict[str, str]] = []
+    display_sources = sorted(
+        visible_sources(sources),
+        key=lambda source: (
+            0 if source.path.is_dir() else 1,
+            source.path.name.lower(),
+        ),
+    )
+    for source in display_sources:
+        source_documents = [
+            document
+            for document in documents
+            if str(source.path) in document.get("sources", [document.get("source", "")])
+        ]
+        if not source.path.is_dir():
+            document = next(
+                (
+                    item
+                    for item in source_documents
+                    if item.get("path") == str(source.path)
+                ),
+                None,
+            )
+            if document is not None:
+                ordered.append(navigation_item(source, document))
+            continue
+
+        tree: dict[str, Any] = {"folders": {}, "documents": []}
+        for document in source_documents:
+            try:
+                relative = Path(str(document["path"])).relative_to(source.path)
+            except ValueError:
+                continue
+            node = tree
+            for part in relative.parts[:-1]:
+                node = node["folders"].setdefault(
+                    part, {"folders": {}, "documents": []}
+                )
+            node["documents"].append(document)
+        ordered.extend(flatten_tree(source, tree))
+    return ordered
+
+
+def write_navigation_order(items: list[dict[str, str]]) -> None:
+    """Atomically publish the canonical sidebar and pagination order."""
+    target = CONTENT_DIR / "_navigation.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump({"items": items}, handle, indent=2)
+        handle.write("\n")
+    temporary.replace(target)
+
+
 def title_from_path(path: Path) -> str:
     words = path.stem.replace("_", " ").replace("-", " ").split()
     return " ".join(word[:1].upper() + word[1:] for word in words) or path.name
@@ -398,7 +490,8 @@ def sync_once(store: ConfigStore) -> dict[str, Any]:
     expected: set[Path] = set()
     documents: dict[Path, dict[str, Any]] = {}
     errors: list[str] = []
-    for source in store.sources():
+    sources = store.sources()
+    for source in sources:
         for path in discover_files(source):
             if path in documents:
                 documents[path]["sources"].append(str(source.path))
@@ -418,10 +511,15 @@ def sync_once(store: ConfigStore) -> dict[str, Any]:
     for stale in CONTENT_DIR.glob("*.mdx"):
         if stale not in expected:
             stale.unlink(missing_ok=True)
+    sorted_documents = sorted(
+        documents.values(), key=lambda item: item["title"].lower()
+    )
+    try:
+        write_navigation_order(build_navigation_order(sources, sorted_documents))
+    except OSError as exc:
+        errors.append(f"navigation order: {exc}")
     return {
-        "documents": sorted(
-            documents.values(), key=lambda item: item["title"].lower()
-        ),
+        "documents": sorted_documents,
         "errors": errors,
     }
 
@@ -493,22 +591,26 @@ def make_handler(store: ConfigStore, start_dir: Path):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/state":
+                sources = store.sources()
+                documents = list_documents(store)
+
+                def serialize_source(source: Source) -> dict[str, str]:
+                    return {
+                        "path": str(source.path),
+                        "id": source.id,
+                        "kind": "directory" if source.path.is_dir() else "file",
+                    }
+
                 json_response(
                     self,
                     {
-                        "sources": [
-                            {
-                                "path": str(source.path),
-                                "id": source.id,
-                                "kind": (
-                                    "directory"
-                                    if source.path.is_dir()
-                                    else "file"
-                                ),
-                            }
-                            for source in store.sources()
+                        "sources": [serialize_source(source) for source in sources],
+                        "displaySources": [
+                            serialize_source(source)
+                            for source in visible_sources(sources)
                         ],
-                        "documents": list_documents(store),
+                        "documents": documents,
+                        "navigationOrder": build_navigation_order(sources, documents),
                         "errors": [],
                         "configPath": str(CONFIG_PATH),
                     },
@@ -720,8 +822,7 @@ def parse_register_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="render-mdx register",
         description=(
-            "Register .md/.mdx files or directories without starting the "
-            "web interface."
+            "Register .md/.mdx files or directories without starting the web interface."
         ),
     )
     parser.add_argument(

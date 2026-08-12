@@ -27,13 +27,15 @@ hidden folders, hidden files, symlink entries, and `node_modules` are skipped.
 
 Rendered documents are organized in the left sidebar by registered source.
 Folder sources are expandable and preserve their nested folder hierarchy, while
-individually registered files appear as direct links. Hover a content block or
-Starlight component and click **+ Note** to attach feedback. The renderer writes
-that feedback directly to the registered source file under a visible
-`## Revision notes` section, including the section hierarchy, block type,
-ordinal, and a short excerpt. When rendered, notes are placed back beside their
-matched content block. This keeps revision requests precise and available to
-agents that later edit the MDX.
+individually registered files appear as direct links. A file registration that
+is already covered by a registered folder is shown only inside that folder.
+Previous and next document links follow the same order as the sidebar. Hover a
+content block or Starlight component and click **+ Note** to attach feedback.
+The renderer writes that feedback directly to the registered source file under
+a visible `## Revision notes` section, including the section hierarchy, block
+type, ordinal, and a short excerpt. When rendered, notes are placed back beside
+their matched content block. This keeps revision requests precise and available
+to agents that later edit the MDX.
 
 Inline notes are collapsed by default. Expand one to read the feedback or use
 **Delete note** to remove that exact annotation from the source MDX.

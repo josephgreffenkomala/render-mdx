@@ -112,10 +112,23 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     return link;
   }
 
-  function renderTree(parent, tree) {
-    const folders = [...tree.folders.entries()].sort(([left], [right]) =>
-      left.localeCompare(right, undefined, { sensitivity: 'base' })
-    );
+  function compareText(left, right) {
+    const leftKey = String(left).toLowerCase();
+    const rightKey = String(right).toLowerCase();
+    if (leftKey < rightKey) return -1;
+    if (leftKey > rightKey) return 1;
+    return 0;
+  }
+
+  function navigationKey(sourcePath, documentPath) {
+    return `${sourcePath}\u0000${documentPath}`;
+  }
+
+  function renderTree(parent, tree, preserveOrder = false) {
+    const folders = [...tree.folders.entries()];
+    if (!preserveOrder) {
+      folders.sort(([left], [right]) => compareText(left, right));
+    }
     for (const [name, childTree] of folders) {
       const group = document.createElement('details');
       group.className = 'document-tree__folder';
@@ -130,16 +143,17 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
 
       const children = document.createElement('div');
       children.className = 'document-tree__children';
-      renderTree(children, childTree);
+      renderTree(children, childTree, preserveOrder);
       group.append(children);
       parent.append(group);
     }
 
-    const documents = [...tree.documents].sort((left, right) =>
-      (left.title || left.path).localeCompare(right.title || right.path, undefined, {
-        sensitivity: 'base',
-      })
-    );
+    const documents = [...tree.documents];
+    if (!preserveOrder) {
+      documents.sort((left, right) =>
+        compareText(left.title || left.path, right.title || right.path)
+      );
+    }
     for (const documentData of documents) {
       parent.append(createDocumentLink(documentData));
     }
@@ -149,13 +163,16 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     if (!content) return;
     content.innerHTML = '';
 
-    const sources = [...(state.sources || [])].sort((left, right) => {
+    const sources = [...(state.displaySources || state.sources || [])].sort((left, right) => {
       if (left.kind !== right.kind) return left.kind === 'directory' ? -1 : 1;
-      return baseName(left.path).localeCompare(baseName(right.path), undefined, {
-        sensitivity: 'base',
-      });
+      return compareText(baseName(left.path), baseName(right.path));
     });
     const documents = state.documents || [];
+    const navigationOrder = state.navigationOrder || [];
+    const navigationRank = new Map(
+      navigationOrder.map((item, index) => [navigationKey(item.source, item.path), index])
+    );
+    const hasCanonicalOrder = navigationOrder.length > 0;
 
     if (!sources.length) {
       const empty = document.createElement('p');
@@ -166,9 +183,15 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     }
 
     for (const source of sources) {
-      const sourceDocuments = documents.filter((documentData) =>
-        (documentData.sources || [documentData.source]).includes(source.path)
-      );
+      const sourceDocuments = documents
+        .filter((documentData) =>
+          (documentData.sources || [documentData.source]).includes(source.path)
+        )
+        .sort((left, right) => {
+          const leftRank = navigationRank.get(navigationKey(source.path, left.path));
+          const rightRank = navigationRank.get(navigationKey(source.path, right.path));
+          return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
+        });
 
       if (source.kind !== 'directory') {
         const documentData = sourceDocuments.find((item) => item.path === source.path);
@@ -213,7 +236,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
       const children = document.createElement('div');
       children.className = 'document-tree__children';
       if (sourceDocuments.length) {
-        renderTree(children, createTree(source, sourceDocuments));
+        renderTree(children, createTree(source, sourceDocuments), hasCanonicalOrder);
       } else {
         const empty = document.createElement('span');
         empty.className = 'document-tree__empty';

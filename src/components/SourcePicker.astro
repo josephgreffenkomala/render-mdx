@@ -148,7 +148,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     setLoading(true);
     try {
       const state = await request('/api/state');
-      lastSources = state.sources || [];
+      lastSources = state.displaySources || state.sources || [];
       lastDocuments = state.documents || [];
       renderFiles(lastSources, lastDocuments);
       if (state.errors?.length) {
