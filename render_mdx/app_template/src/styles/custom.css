@@ -235,6 +235,7 @@
 
 .picker__browse,
 .picker__goto-go,
+.picker__add-folder,
 .picker__file-open,
 .picker__icon-btn,
 .picker__file-remove {
@@ -266,6 +267,7 @@
 
 .picker__browse:hover,
 .picker__goto-go:hover,
+.picker__add-folder:hover,
 .picker__file-open:hover,
 .picker__icon-btn:hover,
 .picker__file-remove:hover {
@@ -488,7 +490,8 @@
 }
 
 .picker__file-open,
-.picker__goto-go {
+.picker__goto-go,
+.picker__add-folder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -505,7 +508,8 @@
 }
 
 .picker__file-open:hover,
-.picker__goto-go:hover {
+.picker__goto-go:hover,
+.picker__add-folder:hover {
   border-color: color-mix(in srgb, var(--sl-color-accent) 32%, transparent);
   background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
 }
@@ -643,6 +647,23 @@
   outline: 0;
   border-color: color-mix(in srgb, var(--sl-color-accent) 36%, transparent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+}
+
+.picker__folder-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.1rem;
+  border-bottom: 1px solid var(--rmx-surface-border);
+  color: var(--sl-color-gray-3);
+  font-size: 0.82rem;
+}
+
+.picker__add-folder {
+  flex: 0 0 auto;
+  font: inherit;
+  cursor: pointer;
 }
 
 .picker__entries {
@@ -971,6 +992,11 @@
 
   .picker__goto {
     grid-template-columns: 1fr;
+  }
+
+  .picker__folder-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .picker__workspace-head {

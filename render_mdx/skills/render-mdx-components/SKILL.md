@@ -49,7 +49,7 @@ Completion criterion: the MDX uses `@mdx-components` for supported presentation 
 ## Authoring rules
 
 - Keep styling out of the MDX document when a Starlight/render-mdx component can express the structure.
-- Use `Aside` for notes, warnings, cautions, and tips.
+- Use `Aside` for callouts. Its `type` must be `note`, `tip`, `caution`, or `danger`; use `caution` for warnings because Starlight does not accept `warning`.
 - Use `Steps` for ordered procedures.
 - Use `CardGrid` and `Card` for grouped options or navigation-style summaries.
 - Use `Tabs` and `TabItem` for parallel variants such as OS-specific commands.
@@ -95,17 +95,27 @@ Use the CLI when the MDX or Markdown document should be saved in render-mdx with
 
 ```bash
 render-mdx register ./docs/example.mdx
+render-mdx register ./docs
 ```
 
-`render-mdx add ./docs/example.mdx` is an alias. Starting the renderer with paths still works and also registers them:
+`render-mdx add ./docs/example.mdx` is an alias. A registered directory includes
+its `.md` and `.mdx` documents recursively and picks up new documents while the
+renderer is running. Starting the renderer with paths still works and also
+registers them:
 
 ```bash
 render-mdx ./docs/example.mdx
 ```
 
-The registry accepts individual `.md` and `.mdx` files only. It rejects directories and missing files. Use `RENDER_MDX_HOME=/tmp/render-mdx-test` during tests or smoke checks so user state is not modified.
+The registry accepts `.md` and `.mdx` files or directories, and rejects missing
+paths and files with other extensions. Recursive directory scans skip nested
+hidden paths, symlink entries, and `node_modules`. Use
+`RENDER_MDX_HOME=/tmp/render-mdx-test` during tests or smoke checks so user state
+is not modified.
 
-Completion criterion: any command that mutates the registry targets the intended `$RENDER_MDX_HOME`/`~/.render-mdx` state, and the registered path resolves to an existing file.
+Completion criterion: any command that mutates the registry targets the intended
+`$RENDER_MDX_HOME`/`~/.render-mdx` state, and the registered path resolves to an
+existing file or directory.
 
 ## Verification
 

@@ -78,6 +78,18 @@ class RevisionNoteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not registered"):
             self.store.add_note(str(self.source), "Target", "Feedback")
 
+    def test_accepts_notes_for_documents_in_a_registered_directory(self) -> None:
+        self.store.add(str(self.root))
+
+        path, _ = self.store.add_note(
+            str(self.source), "Overview", "Clarify this section."
+        )
+
+        self.assertEqual(path, self.source)
+        self.assertIn(
+            "Clarify this section.", self.source.read_text(encoding="utf-8")
+        )
+
     def test_rejects_empty_notes(self) -> None:
         self.store.add(str(self.source))
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import html
 import hashlib
 import json
@@ -33,6 +34,7 @@ CONFIG_PATH = STATE_DIR / "config.json"
 APP_DIR = STATE_DIR / "app"
 CONTENT_DIR = APP_DIR / "src" / "content" / "docs" / "rendered"
 ALLOWED_SUFFIXES = {".md", ".mdx"}
+IGNORED_DIRECTORY_NAMES = {"node_modules"}
 DEFAULT_API_HOST = "127.0.0.1"
 DEFAULT_API_PORT = 8765
 DEFAULT_ASTRO_HOST = "127.0.0.1"
@@ -90,12 +92,14 @@ class ConfigStore:
             return result
 
     def add(self, raw_path: str) -> Source:
+        if not raw_path.strip():
+            raise ValueError("Choose a .md/.mdx file or a directory.")
         path = Path(raw_path).expanduser().resolve()
         if not path.exists():
             raise ValueError(f"Path does not exist: {path}")
-        if not path.is_file():
-            raise ValueError("Choose a .md or .mdx file, not a directory.")
-        if path.suffix.lower() not in ALLOWED_SUFFIXES:
+        if not path.is_file() and not path.is_dir():
+            raise ValueError("Choose a .md/.mdx file or a directory.")
+        if path.is_file() and path.suffix.lower() not in ALLOWED_SUFFIXES:
             raise ValueError("Choose a .md or .mdx file.")
         source = Source(path)
         with self.lock:
@@ -147,7 +151,12 @@ class ConfigStore:
             for entry in data.get("sources", [])
             if isinstance(entry, dict) and isinstance(entry.get("path"), str)
         }
-        if path not in registered_paths:
+        is_registered = any(
+            path == registered
+            or (registered.is_dir() and path.is_relative_to(registered))
+            for registered in registered_paths
+        )
+        if not is_registered:
             raise ValueError("The document is not registered with render-mdx.")
         if (
             not path.exists()
@@ -209,7 +218,31 @@ def ensure_node_dependencies(skip_install: bool = False) -> None:
 
 
 def discover_files(source: Source) -> list[Path]:
-    return [source.path] if source.path.is_file() else []
+    if source.path.is_file():
+        return [source.path] if source.path.suffix.lower() in ALLOWED_SUFFIXES else []
+    if not source.path.is_dir():
+        return []
+
+    documents: list[Path] = []
+    for root, directory_names, file_names in os.walk(source.path):
+        root_path = Path(root)
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if not name.startswith(".")
+            and name not in IGNORED_DIRECTORY_NAMES
+            and not (root_path / name).is_symlink()
+        )
+        for name in sorted(file_names):
+            path = root_path / name
+            if (
+                not name.startswith(".")
+                and path.suffix.lower() in ALLOWED_SUFFIXES
+                and path.is_file()
+                and not path.is_symlink()
+            ):
+                documents.append(path)
+    return documents
 
 
 def title_from_path(path: Path) -> str:
@@ -340,51 +373,55 @@ def mirror_file(path: Path) -> Path:
     return target
 
 
-def list_documents(store: ConfigStore) -> list[dict[str, str]]:
+def list_documents(store: ConfigStore) -> list[dict[str, Any]]:
     """Read-only listing of the documents currently mirrored on disk."""
-    documents: list[dict[str, str]] = []
-    seen: set[Path] = set()
+    documents: dict[Path, dict[str, Any]] = {}
     for source in store.sources():
         for path in discover_files(source):
-            if path in seen:
+            if path in documents:
+                documents[path]["sources"].append(str(source.path))
                 continue
-            seen.add(path)
             target = CONTENT_DIR / rendered_name(path)
             if target.exists():
-                documents.append(
-                    {
-                        "path": str(path),
-                        "title": title_from_path(path),
-                        "url": f"/rendered/{target.stem}/",
-                    }
-                )
-    return sorted(documents, key=lambda item: item["title"].lower())
+                documents[path] = {
+                    "path": str(path),
+                    "source": str(source.path),
+                    "sources": [str(source.path)],
+                    "title": title_from_path(path),
+                    "url": f"/rendered/{target.stem}/",
+                }
+    return sorted(documents.values(), key=lambda item: item["title"].lower())
 
 
 def sync_once(store: ConfigStore) -> dict[str, Any]:
     CONTENT_DIR.mkdir(parents=True, exist_ok=True)
     expected: set[Path] = set()
-    documents: list[dict[str, str]] = []
+    documents: dict[Path, dict[str, Any]] = {}
     errors: list[str] = []
     for source in store.sources():
         for path in discover_files(source):
+            if path in documents:
+                documents[path]["sources"].append(str(source.path))
+                continue
             try:
                 target = mirror_file(path)
                 expected.add(target)
-                documents.append(
-                    {
-                        "path": str(path),
-                        "title": title_from_path(path),
-                        "url": f"/rendered/{target.stem}/",
-                    }
-                )
+                documents[path] = {
+                    "path": str(path),
+                    "source": str(source.path),
+                    "sources": [str(source.path)],
+                    "title": title_from_path(path),
+                    "url": f"/rendered/{target.stem}/",
+                }
             except (OSError, UnicodeDecodeError) as exc:
                 errors.append(f"{path}: {exc}")
     for stale in CONTENT_DIR.glob("*.mdx"):
         if stale not in expected:
             stale.unlink(missing_ok=True)
     return {
-        "documents": sorted(documents, key=lambda item: item["title"].lower()),
+        "documents": sorted(
+            documents.values(), key=lambda item: item["title"].lower()
+        ),
         "errors": errors,
     }
 
@@ -398,8 +435,8 @@ class SyncWorker:
         self.last_signature: dict[str, float] = {}
 
     def start(self) -> None:
-        sync_once(self.store)
         self.last_signature = self.signature()
+        sync_once(self.store)
         self.thread.start()
 
     def stop(self) -> None:
@@ -460,7 +497,15 @@ def make_handler(store: ConfigStore, start_dir: Path):
                     self,
                     {
                         "sources": [
-                            {"path": str(source.path), "id": source.id}
+                            {
+                                "path": str(source.path),
+                                "id": source.id,
+                                "kind": (
+                                    "directory"
+                                    if source.path.is_dir()
+                                    else "file"
+                                ),
+                            }
                             for source in store.sources()
                         ],
                         "documents": list_documents(store),
@@ -570,17 +615,35 @@ def start_api_server(
     try:
         server = ThreadingHTTPServer((host, port), make_handler(store, start_dir))
     except OSError as exc:
-        raise RuntimeError(
-            f"Could not start the local picker API on http://{host}:{port}: {exc}"
-        ) from exc
+        if exc.errno == errno.EADDRINUSE and port != 0:
+            server = ThreadingHTTPServer((host, 0), make_handler(store, start_dir))
+            actual_port = server.server_address[1]
+            print(
+                f"render-mdx: local picker API port {port} is busy; using {actual_port} instead.",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            raise RuntimeError(
+                f"Could not start the local picker API on http://{host}:{port}: {exc}"
+            ) from exc
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
 
 
-def start_astro(host: str, port: int, api_url: str) -> subprocess.Popen[bytes]:
+def build_astro_env(api_url: str) -> dict[str, str]:
     env = os.environ.copy()
     env["RENDER_MDX_API_URL"] = api_url
+    if sys.platform.startswith("linux"):
+        # Polling avoids Linux inotify exhaustion in constrained environments.
+        env.setdefault("CHOKIDAR_USEPOLLING", "1")
+        env.setdefault("CHOKIDAR_INTERVAL", "250")
+    return env
+
+
+def start_astro(host: str, port: int, api_url: str) -> subprocess.Popen[bytes]:
+    env = build_astro_env(api_url)
     try:
         return subprocess.Popen(
             ["npm", "run", "dev", "--", "--host", host, "--port", str(port)],
@@ -656,12 +719,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def parse_register_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="render-mdx register",
-        description="Register .md/.mdx files without starting the web interface.",
+        description=(
+            "Register .md/.mdx files or directories without starting the "
+            "web interface."
+        ),
     )
     parser.add_argument(
         "paths",
         nargs="+",
-        help="One or more .md/.mdx files to save in the render-mdx source registry.",
+        help=(
+            "One or more .md/.mdx files or directories to save in the "
+            "render-mdx source registry."
+        ),
     )
     args = parser.parse_args(argv)
     args.command = "register"
@@ -749,7 +818,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"render-mdx: {exc}", file=sys.stderr)
         return 1
 
-    api_url = f"http://{args.api_host}:{args.api_port}"
     worker = SyncWorker(store, args.watch_interval)
     worker.start()
     api_server: ThreadingHTTPServer | None = None
@@ -758,6 +826,8 @@ def main(argv: list[str] | None = None) -> int:
         api_server = start_api_server(
             store, Path.home().resolve(), args.api_host, args.api_port
         )
+        api_host, api_port = api_server.server_address[:2]
+        api_url = f"http://{api_host}:{api_port}"
         astro = start_astro(args.host, args.port, api_url)
     except RuntimeError as exc:
         worker.stop()

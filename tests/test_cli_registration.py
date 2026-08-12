@@ -2,9 +2,22 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
-from render_mdx.cli import ConfigStore, install_skill, parse_args, register_paths
+from render_mdx.cli import (
+    APP_TEMPLATE,
+    BUNDLED_SKILLS,
+    ConfigStore,
+    build_astro_env,
+    discover_files,
+    install_skill,
+    parse_args,
+    register_paths,
+    start_api_server,
+    sync_once,
+)
 
 
 class CliRegistrationTests(unittest.TestCase):
@@ -58,6 +71,84 @@ class CliRegistrationTests(unittest.TestCase):
             [source.path for source in store.sources()], [self.source.resolve()]
         )
 
+    def test_register_paths_accepts_a_directory(self) -> None:
+        store = ConfigStore(self.root / "config.json")
+
+        (source,) = register_paths(store, [str(self.root)])
+
+        self.assertEqual(source.path, self.root.resolve())
+        self.assertEqual(
+            [item.path for item in store.sources()], [self.root.resolve()]
+        )
+
+    def test_register_paths_rejects_an_empty_path(self) -> None:
+        store = ConfigStore(self.root / "config.json")
+
+        with self.assertRaisesRegex(ValueError, "Choose"):
+            register_paths(store, [""])
+
+    def test_discover_files_recursively_finds_markdown_documents(self) -> None:
+        docs = self.root / "docs"
+        nested = docs / "nested"
+        hidden = docs / ".hidden"
+        dependencies = docs / "node_modules" / "package"
+        nested.mkdir(parents=True)
+        hidden.mkdir(parents=True)
+        dependencies.mkdir(parents=True)
+        top_level = docs / "intro.md"
+        child = nested / "guide.mdx"
+        top_level.write_text("# Intro\n", encoding="utf-8")
+        child.write_text("# Guide\n", encoding="utf-8")
+        (nested / "notes.txt").write_text("Notes\n", encoding="utf-8")
+        (hidden / "draft.md").write_text("# Draft\n", encoding="utf-8")
+        (dependencies / "readme.md").write_text("# Dependency\n", encoding="utf-8")
+        source = ConfigStore(self.root / "config.json").add(str(docs))
+
+        documents = discover_files(source)
+
+        self.assertEqual(documents, [top_level, child])
+
+    def test_sync_once_picks_up_new_files_in_a_registered_directory(self) -> None:
+        docs = self.root / "docs"
+        docs.mkdir()
+        first = docs / "first.md"
+        second = docs / "second.mdx"
+        first.write_text("# First\n", encoding="utf-8")
+        store = ConfigStore(self.root / "config.json")
+        store.add(str(docs))
+
+        with mock.patch("render_mdx.cli.CONTENT_DIR", self.root / "rendered"):
+            initial = sync_once(store)
+            second.write_text("# Second\n", encoding="utf-8")
+            updated = sync_once(store)
+
+        self.assertEqual(
+            [document["path"] for document in initial["documents"]], [str(first)]
+        )
+        self.assertEqual(
+            [document["path"] for document in updated["documents"]],
+            [str(first), str(second)],
+        )
+
+    def test_sync_once_tracks_documents_for_overlapping_sources(self) -> None:
+        docs = self.root / "docs"
+        nested = docs / "nested"
+        nested.mkdir(parents=True)
+        document = nested / "guide.mdx"
+        document.write_text("# Guide\n", encoding="utf-8")
+        store = ConfigStore(self.root / "config.json")
+        store.add(str(docs))
+        store.add(str(nested))
+
+        with mock.patch("render_mdx.cli.CONTENT_DIR", self.root / "rendered"):
+            result = sync_once(store)
+
+        self.assertEqual(len(result["documents"]), 1)
+        self.assertEqual(
+            result["documents"][0]["sources"],
+            [str(docs.resolve()), str(nested.resolve())],
+        )
+
     def test_install_skill_creates_project_agents_skill_directory(self) -> None:
         destination = install_skill(str(self.root))
 
@@ -87,6 +178,68 @@ class CliRegistrationTests(unittest.TestCase):
         self.assertEqual(replaced, destination)
         self.assertTrue((destination / "SKILL.md").is_file())
         self.assertFalse(stale.exists())
+
+    def test_app_template_exposes_bundled_mdx_components(self) -> None:
+        config = (APP_TEMPLATE / "astro.config.mjs").read_text(encoding="utf-8")
+
+        self.assertIn("'@mdx-components':", config)
+        self.assertTrue(
+            (APP_TEMPLATE / "src" / "components" / "mdx" / "index.ts").is_file()
+        )
+
+    def test_authoring_skill_lists_supported_aside_types(self) -> None:
+        skill = (BUNDLED_SKILLS / "render-mdx-components" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("`note`, `tip`, `caution`, or `danger`", skill)
+        self.assertNotIn('type="warning"', skill)
+
+    def test_build_astro_env_enables_polling_on_linux(self) -> None:
+        with mock.patch("render_mdx.cli.sys.platform", "linux"):
+            env = build_astro_env("http://127.0.0.1:8765")
+
+        self.assertEqual(env["RENDER_MDX_API_URL"], "http://127.0.0.1:8765")
+        self.assertEqual(env["CHOKIDAR_USEPOLLING"], "1")
+        self.assertEqual(env["CHOKIDAR_INTERVAL"], "250")
+
+    def test_build_astro_env_preserves_existing_watcher_overrides(self) -> None:
+        with (
+            mock.patch("render_mdx.cli.sys.platform", "linux"),
+            mock.patch.dict(
+                "render_mdx.cli.os.environ",
+                {"CHOKIDAR_USEPOLLING": "0", "CHOKIDAR_INTERVAL": "900"},
+                clear=False,
+            ),
+        ):
+            env = build_astro_env("http://127.0.0.1:8765")
+
+        self.assertEqual(env["CHOKIDAR_USEPOLLING"], "0")
+        self.assertEqual(env["CHOKIDAR_INTERVAL"], "900")
+
+    def test_start_api_server_falls_back_when_requested_port_is_busy(self) -> None:
+        class QuietHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # pragma: no cover - handler body is irrelevant
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                return
+
+        occupied = ThreadingHTTPServer(("127.0.0.1", 0), QuietHandler)
+        self.addCleanup(occupied.server_close)
+
+        server = start_api_server(
+            ConfigStore(self.root / "config.json"),
+            self.root,
+            "127.0.0.1",
+            occupied.server_address[1],
+        )
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+
+        self.assertNotEqual(server.server_address[1], occupied.server_address[1])
+        self.assertGreater(server.server_address[1], 0)
 
 
 if __name__ == "__main__":

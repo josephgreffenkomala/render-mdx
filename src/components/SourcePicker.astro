@@ -26,7 +26,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          Browse files
+          Browse sources
         </button>
         <button class="picker__icon-btn picker__refresh" type="button" title="Refresh" aria-label="Refresh">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -49,8 +49,8 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     <section class="picker__workspace">
       <div class="picker__workspace-head">
         <div class="picker__list-title">
-          <h2>Saved files</h2>
-          <p>Your current render set.</p>
+          <h2>Saved sources</h2>
+          <p>Files and folders in your current render set.</p>
         </div>
         <span class="picker__count"></span>
       </div>
@@ -83,6 +83,10 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
         <input class="picker__goto-input" type="text" autocomplete="off" placeholder="Go to folder, e.g. /home/you/docs" />
         <button class="picker__goto-go" type="submit">Go</button>
       </form>
+      <div class="picker__folder-actions">
+        <span>Include all .md and .mdx files under this folder.</span>
+        <button class="picker__add-folder" type="button">Add this folder</button>
+      </div>
       <div class="picker__entries" role="list"></div>
     </div>
   </div>
@@ -101,6 +105,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
   const status = root?.querySelector('.picker__status');
   const gotoForm = root?.querySelector('.picker__goto');
   const gotoInput = root?.querySelector('.picker__goto-input');
+  const addFolderButton = root?.querySelector('.picker__add-folder');
   const searchInput = root?.querySelector('.picker__search-input');
   let currentPath = '';
   let lastSources = [];
@@ -183,7 +188,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     if (!entries) return;
     entries.innerHTML = '';
     if (!items.length) {
-      empty(entries, 'No MDX files in this folder.', FILE_ICON);
+      empty(entries, 'No subfolders or MDX files in this folder.', FILE_ICON);
       return;
     }
     for (const item of items) {
@@ -200,29 +205,29 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
         if (item.kind === 'directory') {
           browse(item.path).catch((error) => setStatus(error.message, true));
         } else {
-          addFile(item.path);
+          addSource(item.path);
         }
       });
       entries.append(row);
     }
   }
 
-  async function addFile(path) {
+  async function addSource(path) {
     try {
       await request('/api/add', { method: 'POST', body: JSON.stringify({ path }) });
       await loadState();
-      setStatus('File saved. Click Open to view it.');
+      setStatus('Source saved. Open a rendered document from the list or sidebar.');
       closeModal();
     } catch (error) {
       setStatus(error.message, true);
     }
   }
 
-  async function removeFile(path) {
+  async function removeSource(path) {
     try {
       await request('/api/remove', { method: 'POST', body: JSON.stringify({ path }) });
       await loadState();
-      setStatus('File removed.');
+      setStatus('Source removed.');
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -242,8 +247,19 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
   function renderFiles(sources, documents) {
     if (!files) return;
     files.innerHTML = '';
-    const docByPath = new Map((documents || []).map((doc) => [doc.path, doc]));
-    if (countLabel) countLabel.textContent = `${sources.length}`;
+    const allDocuments = documents || [];
+    const docByPath = new Map(allDocuments.map((doc) => [doc.path, doc]));
+    const docsBySource = new Map();
+    for (const doc of allDocuments) {
+      for (const sourcePath of doc.sources || [doc.source]) {
+        const sourceDocuments = docsBySource.get(sourcePath) || [];
+        sourceDocuments.push(doc);
+        docsBySource.set(sourcePath, sourceDocuments);
+      }
+    }
+    if (countLabel) {
+      countLabel.textContent = `${sources.length} sources · ${allDocuments.length} files`;
+    }
     const query = (searchInput?.value || '').trim().toLowerCase();
     const filtered = query
       ? sources.filter((s) => s.path.toLowerCase().includes(query))
@@ -251,21 +267,23 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     if (!sources.length) {
       empty(
         files,
-        'No saved files yet. Use Browse files to pick your first .mdx document.',
+        'No saved sources yet. Browse for a .mdx document or a folder.',
         `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h10l6 6v10H4z" /><path d="M14 4v6h6" /><path d="M8 16h8" /></svg>`
       );
       return;
     }
     if (!filtered.length) {
-      empty(files, `No files match “${query}”.`, FILE_ICON);
+      empty(files, `No sources match “${query}”.`, FILE_ICON);
       return;
     }
     for (const source of filtered) {
-      const doc = docByPath.get(source.path);
+      const isDirectory = source.kind === 'directory';
+      const sourceDocuments = docsBySource.get(source.path) || [];
+      const doc = isDirectory ? sourceDocuments[0] : docByPath.get(source.path);
       const row = document.createElement('div');
       row.className = 'picker__file';
       row.innerHTML = `
-        <span class="picker__file-icon">${FILE_ICON}</span>
+        <span class="picker__file-icon">${isDirectory ? FOLDER_ICON : FILE_ICON}</span>
         <span class="picker__file-text">
           <span class="picker__file-name"></span>
           <span class="picker__file-dir"></span>
@@ -278,17 +296,25 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
         </span>
       `;
       row.querySelector('.picker__file-name').textContent = baseName(source.path);
-      row.querySelector('.picker__file-dir').textContent = dirName(source.path);
+      row.querySelector('.picker__file-dir').textContent = isDirectory
+        ? `${source.path} · ${sourceDocuments.length} document${sourceDocuments.length === 1 ? '' : 's'}`
+        : dirName(source.path);
       const openLink = row.querySelector('.picker__file-open');
       if (doc) {
         openLink.href = doc.url;
+        if (isDirectory) {
+          openLink.textContent = 'Open first';
+          openLink.title = `Open the first of ${sourceDocuments.length} rendered documents`;
+        }
       } else {
         openLink.classList.add('is-disabled');
         openLink.setAttribute('aria-disabled', 'true');
-        openLink.textContent = 'Waiting';
-        openLink.title = 'Not rendered yet. Click Refresh.';
+        openLink.textContent = isDirectory ? 'Empty' : 'Waiting';
+        openLink.title = isDirectory
+          ? 'No .md or .mdx documents found in this folder.'
+          : 'Not rendered yet. Click Refresh.';
       }
-      row.querySelector('.picker__file-remove').addEventListener('click', () => removeFile(source.path));
+      row.querySelector('.picker__file-remove').addEventListener('click', () => removeSource(source.path));
       files.append(row);
     }
   }
@@ -316,6 +342,10 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL ?? 'http://127.0.0.1:8765';
     event.preventDefault();
     const path = gotoInput?.value?.trim();
     if (path) browse(path).catch((error) => setStatus(error.message, true));
+  });
+
+  addFolderButton?.addEventListener('click', () => {
+    if (currentPath) addSource(currentPath);
   });
 
   searchInput?.addEventListener('input', () => {

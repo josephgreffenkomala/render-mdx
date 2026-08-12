@@ -17,12 +17,13 @@ Node.js and npm are required because the renderer is an Astro app. On the first 
 render-mdx
 ```
 
-Open the web interface, browse for a `.md` or `.mdx` file, and click it to save
-its path in `~/.render-mdx/config.json`. Saved files are listed on the home page
-with an Open button that renders the MDX, and a Remove button to forget a path.
-Only individual files are saved — directories are not supported. While the
-command is running, changes to saved files are mirrored into the renderer
-automatically.
+Open the web interface and browse for a `.md`/`.mdx` file or a folder. Click a
+file to register it directly, or enter a folder and choose **Add this folder** to
+register all Markdown documents below it. Saved sources are listed on the home
+page with controls to open rendered documents or forget a path. Registered
+folders are scanned recursively, so new `.md` and `.mdx` files appear
+automatically while the command is running. During recursive scans, nested
+hidden folders, hidden files, symlink entries, and `node_modules` are skipped.
 
 Rendered documents are listed in the standard left sidebar for one-click
 navigation. Hover a content block or Starlight component and click **+ Note**
@@ -57,13 +58,13 @@ component list and Extension Development Host instructions.
 You can also add files when starting:
 
 ```bash
-render-mdx ./notes/example.mdx ./docs/intro.md
+render-mdx ./notes/example.mdx ./docs
 ```
 
 To save source paths without starting the renderer, use the registration command:
 
 ```bash
-render-mdx register ./notes/example.mdx ./docs/intro.md
+render-mdx register ./notes/example.mdx ./docs
 ```
 
 `render-mdx add` is an alias for `render-mdx register`. Registered paths are
