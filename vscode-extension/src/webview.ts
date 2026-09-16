@@ -1,5 +1,9 @@
 import mermaid from 'mermaid';
-import { createMermaidConfig, requestNoteDeletion } from './webview-behavior.js';
+import {
+  createMermaidConfig,
+  expandCodeLineSelection,
+  requestNoteDeletion,
+} from './webview-behavior.js';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -27,6 +31,7 @@ function targetKind(target: Element): string {
   if (target.matches('table')) return 'table';
   if (target.matches('blockquote')) return 'quote';
   if (target.matches('.rmx-mermaid')) return 'diagram';
+  if (target.matches('.rmx-code-walkthrough')) return 'code walkthrough';
   if (target.matches('.card, .sl-link-card')) return 'card';
   if (target.matches('.starlight-aside')) return 'aside';
   if (target.matches('.starlight-file-tree')) return 'file tree';
@@ -50,7 +55,7 @@ function headingPath(target: Element, headings: Element[]): string {
 function noteTargets(): HTMLElement[] {
   const revisionHeading = [...content.querySelectorAll('h2')].find((heading) => normalizedText(heading.textContent).toLowerCase() === 'revision notes');
   const candidates = [...content.querySelectorAll<HTMLElement>(
-    ':scope > :is(h1,h2,h3,h4,h5,h6,p,ul,ol,pre,table,blockquote,.rmx-mermaid), :scope > * :is(.card,.sl-link-card,.starlight-aside,.starlight-file-tree,.starlight-tabs)',
+    ':scope > :is(h1,h2,h3,h4,h5,h6,p,ul,ol,pre,table,blockquote,.rmx-mermaid,.rmx-code-walkthrough), :scope > * :is(.card,.sl-link-card,.starlight-aside,.starlight-file-tree,.starlight-tabs)',
   )];
   return candidates.filter((target) => !revisionHeading || Boolean(target.compareDocumentPosition(revisionHeading) & Node.DOCUMENT_POSITION_FOLLOWING));
 }
@@ -176,6 +181,51 @@ function selectTab(tabs: HTMLElement, selected: number): void {
   [...tabs.querySelectorAll<HTMLButtonElement>(':scope > .rmx-tablist > button')].forEach((button, index) => button.setAttribute('aria-selected', String(index === selected)));
 }
 
+function installCodeWalkthroughs(): void {
+  for (const walkthrough of content.querySelectorAll<HTMLElement>('.rmx-code-walkthrough')) {
+    const steps = [...walkthrough.querySelectorAll<HTMLElement>('[data-code-walkthrough-step]')];
+    const lines = [...walkthrough.querySelectorAll<HTMLElement>('[data-code-line]')];
+    const viewport = walkthrough.querySelector<HTMLElement>('[data-code-viewport]');
+    const status = walkthrough.querySelector<HTMLElement>('[data-code-walkthrough-status]');
+    if (!steps.length || !lines.length || !viewport) continue;
+    walkthrough.dataset.enhanced = 'true';
+
+    const activate = (selectedIndex: number, scrollSource = true) => {
+      const step = steps[selectedIndex];
+      if (!step) return;
+      steps.forEach((candidate, index) => {
+        const active = index === selectedIndex;
+        candidate.toggleAttribute('data-active', active);
+        candidate.querySelector('[data-code-walkthrough-trigger]')?.setAttribute('aria-pressed', String(active));
+      });
+      const selectedLines = expandCodeLineSelection(step.dataset.codeLines ?? '', lines.length);
+      const selected = new Set(selectedLines);
+      lines.forEach((line, index) => line.classList.toggle('is-active-line', selected.has(index + 1)));
+      const title = step.dataset.stepTitle ?? `Section ${selectedIndex + 1}`;
+      const label = step.dataset.lineLabel ?? '';
+      if (status) status.textContent = `${selectedIndex + 1} of ${steps.length} · ${title}${label ? ` · ${label}` : ''}`;
+      if (!scrollSource || !selectedLines.length) return;
+      const line = lines[selectedLines[0] - 1];
+      const top = line.offsetTop - viewport.clientHeight / 2 + line.clientHeight / 2;
+      viewport.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    };
+
+    steps.forEach((step, index) => {
+      const trigger = step.querySelector<HTMLButtonElement>('[data-code-walkthrough-trigger]');
+      trigger?.addEventListener('click', () => activate(index));
+      trigger?.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        const next = (index + direction + steps.length) % steps.length;
+        steps[next]?.querySelector<HTMLButtonElement>('[data-code-walkthrough-trigger]')?.focus();
+        activate(next);
+      });
+    });
+    activate(0, false);
+  }
+}
+
 async function renderMermaid(): Promise<void> {
   const darkTheme = document.body.classList.contains('vscode-dark')
     || document.body.classList.contains('vscode-high-contrast');
@@ -250,6 +300,7 @@ window.addEventListener('message', async (event) => {
     title.textContent = message.title ?? 'Preview';
     status.textContent = '';
     installTabs();
+    installCodeWalkthroughs();
     await renderMermaid().catch((error) => { status.textContent = `Mermaid: ${String(error)}`; });
     const targets = noteTargets();
     describeTargets(targets);

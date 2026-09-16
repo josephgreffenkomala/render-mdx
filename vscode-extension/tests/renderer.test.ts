@@ -39,6 +39,29 @@ import { Aside, Badge, Card, CardGrid, Code, FileTree, Steps, Tabs, TabItem } fr
     expect(html).toContain('starlight-file-tree');
   });
 
+  it('renders an interactive code walkthrough with canonical line ranges', async () => {
+    const html = await renderMdx(`
+import { CodeWalkthrough, CodeWalkthroughStep } from '@mdx-components';
+
+<CodeWalkthrough
+  title="Request lifecycle"
+  filename="src/handler.ts"
+  lang="ts"
+  code={\`const request = read();\nvalidate(request);\nreturn save(request);\`}
+>
+  <CodeWalkthroughStep title="Validate input" lines="3, 2-3">
+    Reject invalid requests before writing.
+  </CodeWalkthroughStep>
+</CodeWalkthrough>
+`);
+
+    expect(html).toContain('class="rmx-code-walkthrough"');
+    expect(html).toContain('data-code-lines="2-3"');
+    expect(html).toContain('Lines 2–3');
+    expect(html).toContain('src/handler.ts');
+    expect(html).toContain('<code class="language-ts"><span');
+  });
+
   it('rejects imports outside @mdx-components', async () => {
     await expect(renderMdx("import Widget from './Widget.astro'\n\n# Nope")).rejects.toThrow("Only imports from '@mdx-components'");
   });

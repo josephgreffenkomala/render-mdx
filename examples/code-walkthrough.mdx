@@ -1,0 +1,68 @@
+---
+title: Code walkthrough demo
+description: A concrete, section-by-section explanation of one request handler.
+---
+
+import { Aside, CodeWalkthrough, CodeWalkthroughStep } from '@mdx-components';
+
+## Code walkthrough
+
+<Aside type="tip" title="How to use this view">
+  Select an explanation card—or scroll through the cards—and the source pane will
+  focus the exact lines being discussed. The code remains independently scrollable.
+</Aside>
+
+<CodeWalkthrough
+  title="Create-order request lifecycle"
+  description="Trace the boundary checks, write, and event publication without losing the full-file context."
+  filename="src/api/create-order.ts"
+  lang="ts"
+  code={`type RequestContext = {
+  request: Request;
+  requestId: string;
+  userId?: string;
+};
+
+export async function handleRequest(context: RequestContext) {
+  const payload = await context.request.json();
+  const input = parseInput(payload);
+
+  const user = await authenticate(context.request);
+  if (!user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const order = await createOrder({
+    input,
+    userId: user.id,
+    requestId: context.requestId,
+  });
+
+  await publishOrderCreated({
+    orderId: order.id,
+    userId: user.id,
+  });
+
+  return Response.json({ order }, { status: 201 });
+}`}
+>
+  <CodeWalkthroughStep title="Define the request boundary" lines="1-9" eyebrow="Input">
+    `RequestContext` makes request identity explicit. The handler then parses the
+    body and immediately converts unknown JSON into validated domain input.
+  </CodeWalkthroughStep>
+
+  <CodeWalkthroughStep title="Stop unauthenticated requests" lines="11-14" eyebrow="Guard">
+    Authentication runs before any write. The early return keeps the successful
+    path flat and makes the `401` response impossible to miss.
+  </CodeWalkthroughStep>
+
+  <CodeWalkthroughStep title="Create the order once" lines="16-20" eyebrow="Write">
+    The use case receives validated input plus audit identifiers. This is the only
+    state-changing call in the request path.
+  </CodeWalkthroughStep>
+
+  <CodeWalkthroughStep title="Publish, then answer" lines="22-27" eyebrow="Output">
+    Downstream consumers receive the new order ID before the handler returns a
+    precise `201 Created` response to the caller.
+  </CodeWalkthroughStep>
+</CodeWalkthrough>

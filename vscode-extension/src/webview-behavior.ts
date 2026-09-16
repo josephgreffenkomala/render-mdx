@@ -7,6 +7,18 @@ export function requestNoteDeletion(
   if (noteId) postMessage({ type: 'deleteNote', noteId });
 }
 
+export function expandCodeLineSelection(selection: string, maximumLine: number): number[] {
+  const lines: number[] = [];
+  for (const token of selection.split(',')) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
+    if (!match) continue;
+    const start = Number(match[1]);
+    const end = Math.min(Number(match[2] ?? match[1]), maximumLine);
+    for (let line = start; line <= end; line += 1) lines.push(line);
+  }
+  return [...new Set(lines)];
+}
+
 const darkThemeVariables = {
   primaryColor: '#134e4a',
   primaryTextColor: '#f0fdfa',

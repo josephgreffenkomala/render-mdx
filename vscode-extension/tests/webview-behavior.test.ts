@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createMermaidConfig, requestNoteDeletion } from '../src/webview-behavior.js';
+import {
+  createMermaidConfig,
+  expandCodeLineSelection,
+  requestNoteDeletion,
+} from '../src/webview-behavior.js';
 
 describe('webview behavior', () => {
   it('sends an undoable delete edit without depending on a native webview dialog', () => {
@@ -27,5 +31,9 @@ describe('webview behavior', () => {
         background: '#0f1f1e',
       },
     });
+  });
+
+  it('expands canonical walkthrough ranges and clips them to the file', () => {
+    expect(expandCodeLineSelection('2-4,8-12', 9)).toEqual([2, 3, 4, 8, 9]);
   });
 });

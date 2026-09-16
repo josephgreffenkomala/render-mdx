@@ -11,8 +11,9 @@ Preview `.mdx` files with the render-mdx visual style without starting a local s
 - Contextual revision notes written into the source MDX through VS Code's edit model.
 - Note deletion and normal VS Code undo/redo.
 
-Supported components are `Aside`, `Badge`, `Card`, `CardGrid`, `Code`, `FileTree`,
-`Icon`, `LinkButton`, `LinkCard`, `Steps`, `TabItem`, and `Tabs`.
+Supported components are `Aside`, `Badge`, `Card`, `CardGrid`, `Code`,
+`CodeWalkthrough`, `CodeWalkthroughStep`, `FileTree`, `Icon`, `LinkButton`,
+`LinkCard`, `Steps`, `TabItem`, and `Tabs`.
 
 The preview accepts imports from `@mdx-components`. Local Astro components and
 imports from other packages are intentionally rejected because they cannot run in

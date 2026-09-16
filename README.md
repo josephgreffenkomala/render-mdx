@@ -46,6 +46,8 @@ The repository also contains a serverless VS Code preview in `vscode-extension/`
 It adds a preview button to the editor title bar for `.mdx` files, updates from
 unsaved editor content, renders the supported `@mdx-components` tags and Mermaid,
 and adds or deletes the same source-backed revision notes using VS Code edits.
+The shared component set includes an interactive `CodeWalkthrough` for pairing
+section-by-section explanations with a scrollable, line-highlighted source file.
 
 To develop or package it:
 

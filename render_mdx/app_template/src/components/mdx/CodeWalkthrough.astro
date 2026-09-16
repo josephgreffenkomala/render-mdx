@@ -1,0 +1,221 @@
+---
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+  code: string;
+  language?: string;
+  lang?: string;
+  filename?: string;
+  title?: string;
+  description?: string;
+}
+
+const {
+  code,
+  language: languageProp,
+  lang,
+  filename = 'Source file',
+  title = 'Code walkthrough',
+  description,
+} = Astro.props;
+
+if (typeof code !== 'string' || !code.trim()) {
+  throw new TypeError('CodeWalkthrough requires a non-empty code string.');
+}
+
+const normalizedCode = code.replace(/\r\n?/g, '\n');
+const language = languageProp ?? lang ?? 'text';
+const lineCount = normalizedCode.endsWith('\n')
+  ? normalizedCode.slice(0, -1).split('\n').length
+  : normalizedCode.split('\n').length;
+---
+
+<code-walkthrough class="rmx-code-walkthrough" data-line-count={lineCount}>
+  <header class="rmx-code-walkthrough__header">
+    <div>
+      <span class="rmx-code-walkthrough__eyebrow">Guided code tour</span>
+      <h3>{title}</h3>
+      {description && <p>{description}</p>}
+    </div>
+    <span class="rmx-code-walkthrough__status" data-code-walkthrough-status aria-live="polite">
+      Choose a section
+    </span>
+  </header>
+
+  <div class="rmx-code-walkthrough__layout">
+    <div class="rmx-code-walkthrough__steps" data-code-walkthrough-steps>
+      <slot />
+    </div>
+
+    <aside class="rmx-code-walkthrough__source" aria-label={`Source code for ${filename}`}>
+      <div class="rmx-code-walkthrough__source-meta">
+        <span class="rmx-code-walkthrough__filename" title={filename}>{filename}</span>
+        <span>{language} · {lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>
+      </div>
+      <div
+        class="rmx-code-walkthrough__code-viewport"
+        data-code-viewport
+        tabindex="0"
+        aria-label={`Scrollable source code for ${filename}`}
+      >
+        <Code code={normalizedCode} lang={language} frame="none" class="rmx-code-walkthrough__code" />
+      </div>
+      <p class="rmx-code-walkthrough__hint">Select or scroll through a section to focus its lines.</p>
+    </aside>
+  </div>
+</code-walkthrough>
+
+<script>
+  import { expandLineRanges, parseLineSelection } from './codeWalkthrough';
+
+  class RmxCodeWalkthrough extends HTMLElement {
+    steps: HTMLElement[] = [];
+    lines: HTMLElement[] = [];
+    viewport: HTMLElement | null = null;
+    status: HTMLElement | null = null;
+    activeIndex = -1;
+    abortController: AbortController | null = null;
+    animationFrame = 0;
+    manualSelectionUntil = 0;
+
+    connectedCallback() {
+      this.abortController?.abort();
+      this.abortController = new AbortController();
+      const { signal } = this.abortController;
+
+      this.steps = [...this.querySelectorAll<HTMLElement>('[data-code-walkthrough-step]')];
+      this.viewport = this.querySelector<HTMLElement>('[data-code-viewport]');
+      this.status = this.querySelector<HTMLElement>('[data-code-walkthrough-status]');
+      this.lines = [
+        ...(this.viewport?.querySelectorAll<HTMLElement>('.ec-line') ?? []),
+      ];
+
+      if (!this.steps.length || !this.lines.length || !this.viewport) return;
+
+      this.dataset.enhanced = 'true';
+      this.steps.forEach((step, index) => {
+        const trigger = step.querySelector<HTMLButtonElement>('[data-code-walkthrough-trigger]');
+        trigger?.addEventListener(
+          'click',
+          () => this.selectManually(index),
+          { signal },
+        );
+        trigger?.addEventListener(
+          'keydown',
+          (event) => this.handleTriggerKeydown(event, index),
+          { signal },
+        );
+      });
+
+      window.addEventListener('scroll', this.scheduleViewportSync, { passive: true, signal });
+      window.addEventListener('resize', this.scheduleViewportSync, { passive: true, signal });
+      this.activate(0, { scrollSource: false });
+      this.scheduleViewportSync();
+    }
+
+    disconnectedCallback() {
+      this.abortController?.abort();
+      cancelAnimationFrame(this.animationFrame);
+    }
+
+    handleTriggerKeydown(event: KeyboardEvent, index: number) {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      const nextIndex = (index + direction + this.steps.length) % this.steps.length;
+      this.steps[nextIndex]
+        ?.querySelector<HTMLButtonElement>('[data-code-walkthrough-trigger]')
+        ?.focus();
+      this.selectManually(nextIndex);
+    }
+
+    scheduleViewportSync = () => {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = requestAnimationFrame(() => this.syncFromViewport());
+    };
+
+    syncFromViewport() {
+      if (performance.now() < this.manualSelectionUntil) return;
+      const bounds = this.getBoundingClientRect();
+      if (bounds.bottom <= 0 || bounds.top >= window.innerHeight) return;
+
+      const focusY = Math.min(window.innerHeight * 0.38, 320);
+      let nearestIndex = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      this.steps.forEach((step, index) => {
+        const rect = step.getBoundingClientRect();
+        const distance = Math.abs(rect.top - focusY);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestIndex = index;
+        }
+      });
+      this.activate(nearestIndex, { scrollSource: true });
+    }
+
+    selectManually(index: number) {
+      this.manualSelectionUntil = performance.now() + 800;
+      this.activate(index, { scrollSource: true, force: true });
+    }
+
+    activate(
+      index: number,
+      { scrollSource = true, force = false }: { scrollSource?: boolean; force?: boolean } = {},
+    ) {
+      const step = this.steps[index];
+      if (!step || (!force && index === this.activeIndex)) return;
+      this.activeIndex = index;
+
+      this.steps.forEach((candidate, candidateIndex) => {
+        const active = candidateIndex === index;
+        candidate.toggleAttribute('data-active', active);
+        candidate
+          .querySelector<HTMLButtonElement>('[data-code-walkthrough-trigger]')
+          ?.setAttribute('aria-pressed', String(active));
+      });
+
+      let selectedNumbers: number[] = [];
+      try {
+        selectedNumbers = expandLineRanges(
+          parseLineSelection(step.dataset.codeLines ?? ''),
+          this.lines.length,
+        );
+      } catch (error) {
+        console.warn('Invalid CodeWalkthroughStep line selection.', error);
+      }
+
+      const selected = new Set(selectedNumbers);
+      this.lines.forEach((line, lineIndex) => {
+        line.classList.toggle('is-active-line', selected.has(lineIndex + 1));
+      });
+
+      const title = step.dataset.stepTitle ?? `Section ${index + 1}`;
+      const lineLabel = step.dataset.lineLabel ?? '';
+      if (this.status) {
+        this.status.textContent = `${index + 1} of ${this.steps.length} · ${title}${lineLabel ? ` · ${lineLabel}` : ''}`;
+      }
+
+      if (scrollSource && selectedNumbers.length) {
+        this.scrollToLine(this.lines[selectedNumbers[0] - 1]);
+      }
+    }
+
+    scrollToLine(line: HTMLElement | undefined) {
+      if (!line || !this.viewport) return;
+      const viewportRect = this.viewport.getBoundingClientRect();
+      const lineRect = line.getBoundingClientRect();
+      const top =
+        this.viewport.scrollTop +
+        lineRect.top -
+        viewportRect.top -
+        this.viewport.clientHeight / 2 +
+        lineRect.height / 2;
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      this.viewport.scrollTo({ top: Math.max(0, top), behavior: reducedMotion ? 'auto' : 'smooth' });
+    }
+  }
+
+  if (!customElements.get('code-walkthrough')) {
+    customElements.define('code-walkthrough', RmxCodeWalkthrough);
+  }
+</script>

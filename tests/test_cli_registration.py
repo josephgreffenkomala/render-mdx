@@ -252,11 +252,32 @@ class CliRegistrationTests(unittest.TestCase):
 
     def test_app_template_exposes_bundled_mdx_components(self) -> None:
         config = (APP_TEMPLATE / "astro.config.mjs").read_text(encoding="utf-8")
+        components = APP_TEMPLATE / "src" / "components" / "mdx"
+        exports = (components / "index.ts").read_text(encoding="utf-8")
 
         self.assertIn("'@mdx-components':", config)
-        self.assertTrue(
-            (APP_TEMPLATE / "src" / "components" / "mdx" / "index.ts").is_file()
+        self.assertTrue((components / "index.ts").is_file())
+        self.assertTrue((components / "CodeWalkthrough.astro").is_file())
+        self.assertTrue((components / "CodeWalkthroughStep.astro").is_file())
+        self.assertIn("CodeWalkthrough", exports)
+        self.assertIn("CodeWalkthroughStep", exports)
+
+    def test_packaged_code_walkthrough_matches_the_development_app(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        mirrored_files = (
+            "src/components/mdx/CodeWalkthrough.astro",
+            "src/components/mdx/CodeWalkthroughStep.astro",
+            "src/components/mdx/codeWalkthrough.ts",
+            "src/components/mdx/index.ts",
+            "src/components/CustomMarkdownContent.astro",
+            "src/styles/custom.css",
         )
+
+        for relative_path in mirrored_files:
+            with self.subTest(path=relative_path):
+                development = (project_root / relative_path).read_text(encoding="utf-8")
+                packaged = (APP_TEMPLATE / relative_path).read_text(encoding="utf-8")
+                self.assertEqual(packaged, development)
 
     def test_app_template_bundles_registered_document_tree(self) -> None:
         components = APP_TEMPLATE / "src" / "components"

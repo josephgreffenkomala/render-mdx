@@ -32,6 +32,8 @@ import {
   Card,
   CardGrid,
   Code,
+  CodeWalkthrough,
+  CodeWalkthroughStep,
   FileTree,
   Icon,
   LinkButton,
@@ -54,6 +56,7 @@ Completion criterion: the MDX uses `@mdx-components` for supported presentation 
 - Use `CardGrid` and `Card` for grouped options or navigation-style summaries.
 - Use `Tabs` and `TabItem` for parallel variants such as OS-specific commands.
 - Use `FileTree` for directory structures.
+- Use `CodeWalkthrough` with `CodeWalkthroughStep` when prose should explain specific line ranges in one source file.
 - Use fenced code blocks for normal code samples.
 - Use fenced `mermaid` blocks for diagrams.
 
@@ -78,6 +81,22 @@ Use steps:
 3. Review the rendered output.
 </Steps>
 ```
+
+Use a guided code walkthrough:
+
+```mdx
+<CodeWalkthrough filename="src/request.ts" lang="ts" code={`const input = read();\nvalidate(input);\nsave(input);`}>
+  <CodeWalkthroughStep title="Validate first" lines="1-2">
+    Parse and validate the input before any write occurs.
+  </CodeWalkthroughStep>
+  <CodeWalkthroughStep title="Persist valid input" lines={3}>
+    The final line performs the side effect.
+  </CodeWalkthroughStep>
+</CodeWalkthrough>
+```
+
+`lines` is one-based and accepts a number, an array of numbers, or comma-separated
+ranges such as `"2-5,8"`. Keep each step focused on the smallest useful range.
 
 Use a Mermaid diagram:
 

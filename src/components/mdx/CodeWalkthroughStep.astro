@@ -1,0 +1,48 @@
+---
+import {
+  formatLineRanges,
+  parseLineSelection,
+  serializeLineRanges,
+  type LineSelection,
+} from './codeWalkthrough';
+
+interface Props {
+  title: string;
+  lines: LineSelection;
+  eyebrow?: string;
+}
+
+const { title, lines, eyebrow = 'Section' } = Astro.props;
+if (!title?.trim()) {
+  throw new TypeError('CodeWalkthroughStep requires a non-empty title.');
+}
+
+const ranges = parseLineSelection(lines);
+const serializedLines = serializeLineRanges(ranges);
+const lineLabel = formatLineRanges(ranges);
+---
+
+<article
+  class="rmx-code-walkthrough-step"
+  data-code-walkthrough-step
+  data-code-lines={serializedLines}
+  data-line-label={lineLabel}
+  data-step-title={title}
+>
+  <button
+    type="button"
+    class="rmx-code-walkthrough-step__trigger"
+    data-code-walkthrough-trigger
+    aria-pressed="false"
+  >
+    <span class="rmx-code-walkthrough-step__index" aria-hidden="true"></span>
+    <span class="rmx-code-walkthrough-step__heading">
+      <span class="rmx-code-walkthrough-step__eyebrow">{eyebrow}</span>
+      <strong>{title}</strong>
+    </span>
+    <span class="rmx-code-walkthrough-step__lines">{lineLabel}</span>
+  </button>
+  <div class="rmx-code-walkthrough-step__body">
+    <slot />
+  </div>
+</article>

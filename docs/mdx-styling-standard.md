@@ -73,6 +73,8 @@ import {
   Card,
   CardGrid,
   Code,
+  CodeWalkthrough,
+  CodeWalkthroughStep,
   FileTree,
   Icon,
   LinkButton,
@@ -273,6 +275,47 @@ Example:
 
 ```mdx
 <Code code={`npm run dev`} lang="bash" />
+```
+
+### `CodeWalkthrough` and `CodeWalkthroughStep`
+
+Use these together to explain one source file section by section. The explanation
+cards appear on the left and a sticky, scrollable code pane appears on the right.
+Selecting a card highlights and centers its lines. As the reader scrolls through
+the explanation, the active code range follows automatically.
+
+`CodeWalkthrough` props:
+
+- `code` required source string
+- `lang?` or `language?` syntax language, default `text`
+- `filename?` displayed source path
+- `title?` walkthrough heading
+- `description?` short context shown below the heading
+
+`CodeWalkthroughStep` props:
+
+- `title` required section title
+- `lines` required one-based selection as a number, number array, or string such as `"2-5,8"`
+- `eyebrow?` small category label, default `Section`
+
+Ranges are validated, sorted, de-duplicated, and merged. Keep a step’s range as
+narrow as possible so the relationship between prose and code stays concrete.
+
+```mdx
+<CodeWalkthrough
+  title="Request lifecycle"
+  description="Follow the request from parsing to persistence."
+  filename="src/request.ts"
+  lang="ts"
+  code={`const input = read();\nvalidate(input);\nconst result = save(input);\nreturn result;`}
+>
+  <CodeWalkthroughStep title="Read and validate" lines="1-2">
+    Validation happens before the first side effect.
+  </CodeWalkthroughStep>
+  <CodeWalkthroughStep title="Persist and return" lines="3-4">
+    The validated value is saved and returned to the caller.
+  </CodeWalkthroughStep>
+</CodeWalkthrough>
 ```
 
 ### Mermaid fenced blocks

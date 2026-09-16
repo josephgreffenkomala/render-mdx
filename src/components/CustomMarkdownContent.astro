@@ -445,6 +445,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL || 'http://127.0.0.1:8765';
     if (target.matches('blockquote')) return 'quote';
     if (target.matches('details')) return 'details';
     if (target.matches('mermaid-diagram')) return 'diagram';
+    if (target.matches('.rmx-code-walkthrough')) return 'code walkthrough';
     if (target.matches('.card, .sl-link-card')) return 'card';
     if (target.matches('.starlight-aside')) return 'aside';
     if (target.matches('starlight-file-tree')) return 'file tree';
@@ -489,7 +490,7 @@ const apiUrl = import.meta.env.RENDER_MDX_API_URL || 'http://127.0.0.1:8765';
     );
     const candidates = [
       ...content.querySelectorAll(
-        ':scope > :is(h1, h2, h3, h4, h5, h6, p, ul, ol, pre, table, blockquote, details, mermaid-diagram), :scope > * :is(.card, .sl-link-card, .starlight-aside, starlight-file-tree, starlight-tabs)'
+        ':scope > :is(h1, h2, h3, h4, h5, h6, p, ul, ol, pre, table, blockquote, details, mermaid-diagram, .rmx-code-walkthrough), :scope > * :is(.card, .sl-link-card, .starlight-aside, starlight-file-tree, starlight-tabs)'
       ),
     ];
     return candidates.filter((target) => !revisionHeading || target.compareDocumentPosition(revisionHeading) & Node.DOCUMENT_POSITION_FOLLOWING);

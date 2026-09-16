@@ -25,6 +25,14 @@
       "files": [
         "docs/deployment-runbook.mdx"
       ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create an MDX explanation of one request handler with prose tied to exact source-code line ranges.",
+      "expected_output": "The agent imports CodeWalkthrough and CodeWalkthroughStep from @mdx-components, passes the full source once, divides the explanation into focused steps with valid one-based line ranges, and avoids inline styling.",
+      "files": [
+        "docs/request-handler.mdx"
+      ]
     }
   ]
 }

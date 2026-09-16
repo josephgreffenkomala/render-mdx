@@ -97,12 +97,120 @@ function Code({ code = '', lang = 'text' }: Props) {
   return <pre><code className={`language-${String(lang)}`}>{String(code)}</code></pre>;
 }
 
+type CodeLineRange = { start: number; end: number };
+
+function normalizeCodeLineSelection(value: unknown): { serialized: string; label: string } {
+  const tokens = Array.isArray(value)
+    ? value.map(String)
+    : typeof value === 'number'
+      ? [String(value)]
+      : String(value ?? '').split(',').map((token) => token.trim());
+  if (!tokens.length || tokens.every((token) => !token)) {
+    throw new TypeError('CodeWalkthroughStep lines cannot be empty.');
+  }
+
+  const ranges = tokens.map((token): CodeLineRange => {
+    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(token);
+    if (!match) throw new TypeError('CodeWalkthroughStep lines must use positive line numbers.');
+    const start = Number(match[1]);
+    const end = Number(match[2] ?? match[1]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < 1) {
+      throw new TypeError('CodeWalkthroughStep lines must use positive line numbers.');
+    }
+    if (end < start) throw new TypeError(`CodeWalkthroughStep range "${token}" must start before it ends.`);
+    return { start, end };
+  }).sort((left, right) => left.start - right.start || left.end - right.end);
+
+  const merged = ranges.reduce<CodeLineRange[]>((result, range) => {
+    const previous = result.at(-1);
+    if (previous && range.start <= previous.end + 1) previous.end = Math.max(previous.end, range.end);
+    else result.push({ ...range });
+    return result;
+  }, []);
+  const serialized = merged.map(({ start, end }) => start === end ? String(start) : `${start}-${end}`).join(',');
+  const readable = merged.map(({ start, end }) => start === end ? String(start) : `${start}–${end}`).join(', ');
+  const singular = merged.length === 1 && merged[0]?.start === merged[0]?.end;
+  return { serialized, label: `${singular ? 'Line' : 'Lines'} ${readable}` };
+}
+
+function CodeWalkthroughStep({ title, lines, eyebrow = 'Section', children }: Props) {
+  const stepTitle = String(title ?? '').trim();
+  if (!stepTitle) throw new TypeError('CodeWalkthroughStep requires a non-empty title.');
+  const selection = normalizeCodeLineSelection(lines);
+  return (
+    <article
+      className="rmx-code-walkthrough-step"
+      data-code-walkthrough-step
+      data-code-lines={selection.serialized}
+      data-line-label={selection.label}
+      data-step-title={stepTitle}
+    >
+      <button type="button" className="rmx-code-walkthrough-step__trigger" data-code-walkthrough-trigger aria-pressed="false">
+        <span className="rmx-code-walkthrough-step__index" aria-hidden="true" />
+        <span className="rmx-code-walkthrough-step__heading">
+          <span className="rmx-code-walkthrough-step__eyebrow">{String(eyebrow)}</span>
+          <strong>{stepTitle}</strong>
+        </span>
+        <span className="rmx-code-walkthrough-step__lines">{selection.label}</span>
+      </button>
+      <div className="rmx-code-walkthrough-step__body">{children}</div>
+    </article>
+  );
+}
+
+function CodeWalkthrough({
+  code = '',
+  language,
+  lang,
+  filename = 'Source file',
+  title = 'Code walkthrough',
+  description,
+  children,
+}: Props) {
+  const source = String(code).replace(/\r\n?/g, '\n');
+  if (!source.trim()) throw new TypeError('CodeWalkthrough requires a non-empty code string.');
+  const sourceLines = source.endsWith('\n') ? source.slice(0, -1).split('\n') : source.split('\n');
+  const sourceLanguage = String(language ?? lang ?? 'text');
+  const sourceFilename = String(filename);
+  return (
+    <section className="rmx-code-walkthrough" data-line-count={sourceLines.length}>
+      <header className="rmx-code-walkthrough__header">
+        <div>
+          <span className="rmx-code-walkthrough__eyebrow">Guided code tour</span>
+          <h3>{String(title)}</h3>
+          {description ? <p>{String(description)}</p> : null}
+        </div>
+        <span className="rmx-code-walkthrough__status" data-code-walkthrough-status aria-live="polite">Choose a section</span>
+      </header>
+      <div className="rmx-code-walkthrough__layout">
+        <div className="rmx-code-walkthrough__steps" data-code-walkthrough-steps>{children}</div>
+        <aside className="rmx-code-walkthrough__source" aria-label={`Source code for ${sourceFilename}`}>
+          <div className="rmx-code-walkthrough__source-meta">
+            <span className="rmx-code-walkthrough__filename" title={sourceFilename}>{sourceFilename}</span>
+            <span>{sourceLanguage} · {sourceLines.length} {sourceLines.length === 1 ? 'line' : 'lines'}</span>
+          </div>
+          <div className="rmx-code-walkthrough__code-viewport" data-code-viewport tabIndex={0} aria-label={`Scrollable source code for ${sourceFilename}`}>
+            <pre className="rmx-code-walkthrough__plain-code"><code className={`language-${sourceLanguage}`}>
+              {sourceLines.map((line, index) => (
+                <span className="rmx-code-walkthrough__plain-line" data-code-line={index + 1} key={index}>{line || '\u00a0'}</span>
+              ))}
+            </code></pre>
+          </div>
+          <p className="rmx-code-walkthrough__hint">Select a section to focus its lines.</p>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 export const mdxComponents = {
   Aside,
   Badge,
   Card,
   CardGrid,
   Code,
+  CodeWalkthrough,
+  CodeWalkthroughStep,
   FileTree,
   Icon,
   LinkButton,
